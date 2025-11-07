@@ -96,8 +96,6 @@ def cmd_eval(args):
     print(rep)
 
 def cmd_beam(args):
-    import time, json
-    import torch
     # 这些工具通常在本文件已有全局导入；若没有则取消下面两行注释
     # from oeis.checker import check_program_on_pair, check_program_moonshine
     # from oeis.beam_egd import egd_beam_search
