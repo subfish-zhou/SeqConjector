@@ -149,13 +149,14 @@ def main():
     parser.add_argument("--output", default="results.jsonl")
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--log-level", default="INFO", help="Logging level (DEBUG, INFO, WARNING, ERROR)")
+    parser.add_argument("--chunk-size", type=int, default=1, help="Task chunk size for multiprocessing (smaller=better load balance)")
     args = parser.parse_args()
 
     setup_logging(args.log_level)
     # 1. Load Data
     logger.info(f"Loading data from {args.data}...")
     seq_map = {}
-    with open(args.data, 'r') as f:
+    with open(args.data, 'r', encoding='utf-8') as f:
         for line in f:
             item = json.loads(line)
             seq_map[item['id']] = item
@@ -197,16 +198,22 @@ def main():
     
     # Initialize pool with model loading
     summary = {"success": 0, "fail": 0, "error": 0}
+    chunk_size = max(1, args.chunk_size)
+    total_task_time = 0.0
 
     with multiprocessing.Pool(processes=num_workers, initializer=init_worker, initargs=(args.ckpt, device)) as pool:
-        for res in pool.imap_unordered(solve_pair, tasks, chunksize=10):
+        for res in pool.imap_unordered(solve_pair, tasks, chunksize=chunk_size):
             results.append(res)
             summary[res["status"]] = summary.get(res["status"], 0) + 1
             count += 1
+            total_task_time += res.get("time", 0.0)
             if count % 50 == 0:
-                elapsed = sum(r["time"] for r in results)
-                throughput = count / max(elapsed, 1e-6)
-                logger.info(f"Processed {count}/{len(tasks)} ({count/len(tasks)*100:.1f}%) | throughput ~{throughput:.2f} tasks/s")
+                avg_task_time = total_task_time / max(count, 1)
+                throughput = 1.0 / max(avg_task_time, 1e-6)
+                logger.info(
+                    f"Processed {count}/{len(tasks)} ({count/len(tasks)*100:.1f}%) | "
+                    f"avg task {avg_task_time:.3f}s | throughput ~{throughput:.2f} tasks/s"
+                )
 
     logger.info(f"Finished processing {count} tasks. Summary: {summary}")
     logger.info(f"Saving to {args.output}...")
