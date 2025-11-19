@@ -117,6 +117,18 @@ def exec_loss_moon(inter, toks, A_vis, B_vis, k_strict=3, tau0=2e-3, tau1=1e-3, 
     return torch.tensor(head_err + tail_err, dtype=torch.float32)
 
 
+def collate_batch(batch):
+    return {
+        "x": torch.nn.utils.rnn.pad_sequence([v["x"] for v in batch], batch_first=True, padding_value=0),
+        "y": torch.nn.utils.rnn.pad_sequence([v["y"] for v in batch], batch_first=True, padding_value=-100),
+        "feat": torch.stack([v["feat"] for v in batch], dim=0),
+        "A": torch.nn.utils.rnn.pad_sequence([v["A"] for v in batch], batch_first=True, padding_value=0),
+        "B": torch.nn.utils.rnn.pad_sequence([v["B"] for v in batch], batch_first=True, padding_value=0),
+        "len": torch.tensor([len(v["y"]) for v in batch], dtype=torch.long),
+        "is_moon": torch.stack([v["is_moon"] for v in batch], dim=0),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="ckpt.pt")
@@ -133,15 +145,7 @@ def main():
     args = ap.parse_args()
 
     ds = ShortDataset(M=args.m, seed=0, moonshine_prob=args.moonshine_prob)
-    dl = DataLoader(ds, batch_size=args.bs, shuffle=True, num_workers=2, collate_fn=lambda b: {
-        "x": torch.nn.utils.rnn.pad_sequence([v["x"] for v in b], batch_first=True, padding_value=0),
-        "y": torch.nn.utils.rnn.pad_sequence([v["y"] for v in b], batch_first=True, padding_value=-100),
-        "feat": torch.stack([v["feat"] for v in b], dim=0),
-        "A": torch.nn.utils.rnn.pad_sequence([v["A"] for v in b], batch_first=True, padding_value=0),
-        "B": torch.nn.utils.rnn.pad_sequence([v["B"] for v in b], batch_first=True, padding_value=0),
-        "len": torch.tensor([len(v["y"]) for v in b], dtype=torch.long),
-        "is_moon": torch.stack([v["is_moon"] for v in b], dim=0),
-    })
+    dl = DataLoader(ds, batch_size=args.bs, shuffle=True, num_workers=2, collate_fn=collate_batch)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = TransDecoder(Cfg(), vocab=len(TOKENS)).to(device)

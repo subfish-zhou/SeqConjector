@@ -5,6 +5,7 @@ import multiprocessing
 import os
 import torch
 import sys
+import logging
 
 # Add current directory to path so we can import oeis modules
 sys.path.append(os.getcwd())
@@ -14,6 +15,8 @@ from oeis.checker import check_program_on_pair, check_program_moonshine
 from oeis.beam_egd import egd_beam_search
 from main import try_templates_moonshine, TorchAdapter, RandomAdapter
 
+logger = logging.getLogger(__name__)
+
 # Global model for workers
 worker_model = None
 
@@ -21,8 +24,10 @@ def init_worker(ckpt_path, device):
     global worker_model
     # Load model once per worker
     if ckpt_path:
+        logger.info(f"[pid={os.getpid()}] Loading checkpoint from {ckpt_path} on {device}")
         worker_model = TorchAdapter(ckpt_path, device=device)
     else:
+        logger.info(f"[pid={os.getpid()}] Using RandomAdapter")
         worker_model = RandomAdapter(seed=os.getpid())
 
 def solve_pair(task):
@@ -45,6 +50,7 @@ def solve_pair(task):
     toks = []
     result_status = "fail"
     result_reason = ""
+    logger.debug(f"Task start A:{A_id} B:{B_id} mode:{mode} n_in:{n_in} n_chk:{local_n_chk}")
     
     try:
         # Logic copied/adapted from main.py cmd_beam
@@ -62,11 +68,13 @@ def solve_pair(task):
             )
             
             if rep0 and getattr(rep0, "ok", False):
+                duration = time.time() - start_time
+                logger.info(f"Template hit A:{A_id} B:{B_id} mode:{mode} time:{duration:.3f}s")
                 return {
                     "A_id": A_id, "B_id": B_id, 
                     "mode": mode, "status": "success", 
                     "program": " ".join(toks0), 
-                    "time": time.time() - start_time,
+                    "time": duration,
                     "reason": "template_hit"
                 }
 
@@ -103,14 +111,17 @@ def solve_pair(task):
             
         if rep.ok:
             result_status = "success"
+            logger.info(f"Solved A:{A_id} B:{B_id} mode:{mode} len:{len(toks)} time:{time.time()-start_time:.3f}s")
         else:
             result_status = "fail"
             result_reason = str(rep)
+            logger.debug(f"Validation failed A:{A_id} B:{B_id} mode:{mode} reason:{result_reason}")
 
     except Exception as e:
         result_status = "error"
         result_reason = str(e)
         toks = []
+        logger.exception(f"Error solving A:{A_id} B:{B_id} mode:{mode}: {e}")
 
     return {
         "A_id": A_id, 
@@ -122,16 +133,27 @@ def solve_pair(task):
         "reason": result_reason
     }
 
+def setup_logging(level: str):
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s [pid=%(process)d] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    logger.info(f"Logger initialized at level {level.upper()}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="oeis_seq_labeled/formula_true/trivial.jsonl")
     parser.add_argument("--ckpt", default="ckpt.pt")
     parser.add_argument("--output", default="results.jsonl")
     parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--log-level", default="INFO", help="Logging level (DEBUG, INFO, WARNING, ERROR)")
     args = parser.parse_args()
 
+    setup_logging(args.log_level)
     # 1. Load Data
-    print(f"Loading data from {args.data}...")
+    logger.info(f"Loading data from {args.data}...")
     seq_map = {}
     with open(args.data, 'r') as f:
         for line in f:
@@ -143,7 +165,7 @@ def main():
     # We need to run both modes
     modes = ["exact", "moonshine"]
     
-    print("Generating task list...")
+    logger.info("Generating task list...")
     for b_id, item in seq_map.items():
         if "related_seq" not in item:
             continue
@@ -161,11 +183,11 @@ def main():
                     # task: (A_seq, B_seq, A_id, B_id, mode, n_in, n_chk, timeout)
                     tasks.append((a_seq, b_seq, a_id, b_id, mode, 8, 8, 1.0))
 
-    print(f"Total tasks: {len(tasks)}")
+    logger.info(f"Total tasks: {len(tasks)}")
 
     # 3. Run Parallel
     num_workers = args.workers if args.workers > 0 else os.cpu_count()
-    print(f"Running with {num_workers} workers...")
+    logger.info(f"Running with {num_workers} workers...")
     
     # Check device for worker init
     device = "cpu" # Force CPU as requested for parallelism on non-GPU server
@@ -174,14 +196,20 @@ def main():
     count = 0
     
     # Initialize pool with model loading
+    summary = {"success": 0, "fail": 0, "error": 0}
+
     with multiprocessing.Pool(processes=num_workers, initializer=init_worker, initargs=(args.ckpt, device)) as pool:
         for res in pool.imap_unordered(solve_pair, tasks, chunksize=10):
             results.append(res)
+            summary[res["status"]] = summary.get(res["status"], 0) + 1
             count += 1
-            if count % 100 == 0:
-                print(f"Processed {count}/{len(tasks)}", end='\r')
+            if count % 50 == 0:
+                elapsed = sum(r["time"] for r in results)
+                throughput = count / max(elapsed, 1e-6)
+                logger.info(f"Processed {count}/{len(tasks)} ({count/len(tasks)*100:.1f}%) | throughput ~{throughput:.2f} tasks/s")
 
-    print(f"\nFinished. Saving to {args.output}...")
+    logger.info(f"Finished processing {count} tasks. Summary: {summary}")
+    logger.info(f"Saving to {args.output}...")
     
     with open(args.output, 'w') as f:
         for res in results:
