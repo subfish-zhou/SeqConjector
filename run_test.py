@@ -36,15 +36,14 @@ def solve_pair(task):
     """
     A, B, A_id, B_id, mode, n_in, n_chk, timeout = task
     
-    # Adjust n_chk if sequence is too short
+    # Adjust n_in / n_chk if sequence is too short
     min_len = min(len(A), len(B))
-    if n_in + n_chk > min_len:
-        local_n_chk = max(0, min_len - n_in)
-    else:
-        local_n_chk = n_chk
+    local_n_in = min(n_in, min_len)
+    remaining = max(0, min_len - local_n_in)
+    local_n_chk = min(n_chk, remaining)
 
-    A_vis = A[:n_in]
-    B_vis = B[:n_in]
+    A_vis = A[:local_n_in]
+    B_vis = B[:local_n_in]
     
     start_time = time.time()
     toks = []

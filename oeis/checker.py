@@ -25,6 +25,9 @@ def check_program_on_pair(tokens: List[str], A_full: List[int], B_full: List[int
         P = parse_prefix(tokens)
     except Exception as e:
         return CheckReport(False, False, False, f"parse_error:{e}", tokens, 0, 0, None)
+    # 检查程序是否包含 A
+    if not P.contains_A():
+        return CheckReport(False, False, False, "program_must_contain_A", tokens, 0, 0, None)
     # Stage A
     A_vis = A_full[:n_in]; B_vis = B_full[:n_in]
     rA = inter_loose.execute(P, A_vis)
@@ -54,6 +57,9 @@ def check_program_moonshine(tokens: List[str], A_full: List[int], B_full: List[i
         P = parse_prefix(tokens)
     except Exception as e:
         return CheckReport(False, False, False, f"parse_error:{e}", tokens, 0, 0, None)
+    # 检查程序是否包含 A
+    if not P.contains_A():
+        return CheckReport(False, False, False, "program_must_contain_A", tokens, 0, 0, None)
     inter = Interpreter(ExecConfig(strict=True, t0=10, t_step=3))
     r = inter.execute(P, A_full[:N2])
     if (not r.ok) or (r.seq is None) or (len(r.seq) < N2):

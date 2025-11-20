@@ -39,12 +39,13 @@ python main.py beam \
 
 ---
 
-一个用于“序列→序列”关系合成的最小完整系统（MVP），聚焦 **N≤20** 的短前缀任务，内置：
+一个用于"序列→序列"关系合成的最小完整系统（MVP），聚焦 **N≤20** 的短前缀任务，内置：
 
 * 专用 **DSL**（覆盖 `scale/offset/diff/scan/zip/conv/poly/binom/ibinom/euler` 等常见关系）
 * **INSERT1 / INSERT2** 原语（仅在第 1 / 第 2 位插入常数；长度不变）——面向 Moonshine 例子
+* **程序必须包含 A**：强制要求 B 必须从 A 变换而来，不允许纯原语组合
 * **Moonshine 宽检验**（前 `k` 项严格匹配，尾部对数相对误差放宽，阈值随索引线性增长）
-* **EGD**（执行引导束搜）：语法约束 + 宽松/严格双执行器前缀剪枝 + “最小误差兜底”
+* **EGD**（执行引导束搜）：语法约束 + 宽松/严格双执行器前缀剪枝 + "最小误差兜底"
 * **模板 + 求参** 快速通道：`SCAN_ADD A`、`INSERT1 B[1] (SCAN_ADD A)`、`INSERT2 B[2] (SCAN_ADD A)`
 * 训练：**交叉熵主损失** + **小权重执行宽损失**（对 moonshine-like 合成样本）
 * 运行时间统计：成功时输出 `beam / check / total` 秒数；模板命中可选打印 `tpl`
@@ -179,7 +180,7 @@ python train_torch.py \
 **一元/扫描**
 `SCALE c`, `OFFSET c`, `MAP_ABS`, `MAP_SGN`, `MAP_MOD m`,
 `MAP_TAU/MAP_SIGMA/MAP_PHI/MAP_MU/MAP_OMEGA/MAP_BIGOMEGA`,
-`SCAN_ADD`, `SCAN_MUL`, `CUMMAX`, `CUMMIN`,
+`SCAN_ADD`, `SCAN_MUL`,
 `DIFF_FWD k`（宽松时尾部填 0 / 严格报未定义）, `DIFF_BACK k`
 
 **二元/多元**
@@ -189,20 +190,27 @@ python train_torch.py \
 
 **索引/变换**
 `REIDX k b`（检查全域索引合法）
-`SUBSAMPLE k`（k>0）、`REPEAT k`（k>0）、`INDEXBY`（自索引）
+`SUBSAMPLE k`（k>0）、`REPEAT k`（k>0）
 
 **标准变换**
 `BINOM` / `IBINOM`（二项式/逆二项式变换，行缓存）
 `EULER`（欧拉变换，缓存 + 严格时保证整除，否则报错）
 
-**插项原语**
+**插项/删除原语**
 `INSERT1 c`、`INSERT2 c`：仅在第 1/2 位插入常数 `c`，其他右移并丢弃末项，**长度不变**。
+`DROP_AT_2`：删除第 2 个元素，其他元素前移，**长度减 1**。
 
 > 用于 Moonshine 例子：`INSERT1 744 SCAN_ADD A`。
 
 ---
 
 ## 检验（Checker）
+
+### 通用规则
+
+* **程序必须包含 A**：所有程序必须包含输入序列 `A`，确保 B 是从 A 变换而来
+  - 不允许如 `PRED_IS_EVEN_N` 这样纯原语自己生成的程序
+  - 必须有 `A` 节点作为程序树的叶子节点之一
 
 ### 严格检验
 
@@ -219,10 +227,11 @@ python train_torch.py \
 
 ## EGD 束搜（关键点）
 
+* **程序必须包含 A**：在评估候选程序时，自动过滤不包含 A 的程序
 * **语法约束**：token 只从允许集合扩展（例如 `ZIP` 的两个延迟限制在 `0..16`）
 * **前缀执行**：宽松执行用于估误差；**严格执行用于早剪枝**（越界/未定义直接丢）
 * **误差函数**：前 `k_strict` 必须刚好对上；尾部用 log 相对误差的 RMSE
-* **兜底策略**：若没有“合格”候选，返回 **误差最小** 的可解析前缀，而非退回 `A`
+* **兜底策略**：若没有"合格"候选，返回 **误差最小** 的可解析前缀，而非退回 `A`
 * **时间限制**：`--time_limit`（默认 10s）
 
 ---

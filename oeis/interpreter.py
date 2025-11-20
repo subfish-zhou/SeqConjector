@@ -102,88 +102,103 @@ class Interpreter:
     def _eval(self, node: Node, A: List[int], budget: Budget) -> List[int]:
         op=node.op
         if op=="A": return A
-        X = self._eval(node.kids[0], A, budget) if node.kids else A
+        
+        # Lazy evaluation of children
+        kids_eval = []
+        # For performance, most ops are unary, some binary/ternary
+        # We won't evaluate kids here globally, but let ops do it.
+        
+        # Helper to eval kid 0
+        def get_X(): 
+            return self._eval(node.kids[0], A, budget) if node.kids else A
+
         if op=="SCALE":
-            c=node.args[0]; return [budget.add_for(i) or (budget.charge(1) or 0, c*X[i])[1] for i in range(len(X))]
+            X=get_X(); c=node.args[0]; return [budget.add_for(i) or (budget.charge(1) or 0, c*X[i])[1] for i in range(len(X))]
         if op=="OFFSET":
-            c=node.args[0]; return [budget.add_for(i) or (budget.charge(1) or 0, X[i]+c)[1] for i in range(len(X))]
+            X=get_X(); c=node.args[0]; return [budget.add_for(i) or (budget.charge(1) or 0, X[i]+c)[1] for i in range(len(X))]
         if op=="MAP_ABS":
-            return [budget.add_for(i) or (budget.charge(1) or 0, abs(X[i]))[1] for i in range(len(X))]
+            X=get_X(); return [budget.add_for(i) or (budget.charge(1) or 0, abs(X[i]))[1] for i in range(len(X))]
         if op=="MAP_SGN":
-            return [budget.add_for(i) or (budget.charge(1) or 0, (1 if X[i]>0 else (0 if X[i]==0 else -1)))[1] for i in range(len(X))]
+            X=get_X(); return [budget.add_for(i) or (budget.charge(1) or 0, (1 if X[i]>0 else (0 if X[i]==0 else -1)))[1] for i in range(len(X))]
         if op=="MAP_MOD":
-            m=node.args[0]; return [budget.add_for(i) or (budget.charge(5) or 0, X[i]%m)[1] for i in range(len(X))]
-        if op=="MAP_TAU":   return [budget.add_for(i) or (budget.charge(50) or 0, tau(X[i]))[1] for i in range(len(X))]
-        if op=="MAP_SIGMA": return [budget.add_for(i) or (budget.charge(80) or 0, sigma(X[i]))[1] for i in range(len(X))]
-        if op=="MAP_PHI":   return [budget.add_for(i) or (budget.charge(50) or 0, phi(X[i]))[1] for i in range(len(X))]
-        if op=="MAP_MU":    return [budget.add_for(i) or (budget.charge(50) or 0, mu(X[i]))[1] for i in range(len(X))]
-        if op=="MAP_OMEGA": return [budget.add_for(i) or (budget.charge(50) or 0, omega(X[i], False))[1] for i in range(len(X))]
-        if op=="MAP_BIGOMEGA": return [budget.add_for(i) or (budget.charge(50) or 0, omega(X[i], True))[1] for i in range(len(X))]
+            X=get_X(); m=node.args[0]; 
+            if m==0: 
+                if self.cfg.strict: raise RuntimeError("mod_by_zero")
+                return [0]*len(X)
+            return [budget.add_for(i) or (budget.charge(5) or 0, X[i]%m)[1] for i in range(len(X))]
+        if op=="MAP_DIV":
+            X=get_X(); c=node.args[0];
+            if c==0:
+                if self.cfg.strict: raise RuntimeError("div_by_zero")
+                return [0]*len(X)
+            return [budget.add_for(i) or (budget.charge(5) or 0, X[i]//c)[1] for i in range(len(X))]
+        if op=="MAP_SQRT":
+            import math
+            X=get_X()
+            def isqrt_safe(n):
+                if n<0: 
+                    if self.cfg.strict: raise RuntimeError("sqrt_negative")
+                    return 0
+                return math.isqrt(n)
+            return [budget.add_for(i) or (budget.charge(5) or 0, isqrt_safe(X[i]))[1] for i in range(len(X))]
+            
+        if op=="MAP_TAU":   X=get_X(); return [budget.add_for(i) or (budget.charge(50) or 0, tau(X[i]))[1] for i in range(len(X))]
+        if op=="MAP_SIGMA": X=get_X(); return [budget.add_for(i) or (budget.charge(80) or 0, sigma(X[i]))[1] for i in range(len(X))]
+        if op=="MAP_PHI":   X=get_X(); return [budget.add_for(i) or (budget.charge(50) or 0, phi(X[i]))[1] for i in range(len(X))]
+        if op=="MAP_MU":    X=get_X(); return [budget.add_for(i) or (budget.charge(50) or 0, mu(X[i]))[1] for i in range(len(X))]
+        if op=="MAP_OMEGA": X=get_X(); return [budget.add_for(i) or (budget.charge(50) or 0, omega(X[i], False))[1] for i in range(len(X))]
+        if op=="MAP_BIGOMEGA": X=get_X(); return [budget.add_for(i) or (budget.charge(50) or 0, omega(X[i], True))[1] for i in range(len(X))]
+        
+        if op=="SEQ_ADD":
+            L=self._eval(node.kids[0], A, budget); R=self._eval(node.kids[1], A, budget)
+            return [budget.add_for(i) or (budget.charge(1) or 0, L[i]+R[i])[1] for i in range(len(L))]
+        if op=="SEQ_SUB":
+            L=self._eval(node.kids[0], A, budget); R=self._eval(node.kids[1], A, budget)
+            return [budget.add_for(i) or (budget.charge(1) or 0, L[i]-R[i])[1] for i in range(len(L))]
+        if op=="SEQ_MUL":
+            L=self._eval(node.kids[0], A, budget); R=self._eval(node.kids[1], A, budget)
+            return [budget.add_for(i) or (budget.charge(1) or 0, L[i]*R[i])[1] for i in range(len(L))]
+        if op=="SEQ_DIV":
+            L=self._eval(node.kids[0], A, budget); R=self._eval(node.kids[1], A, budget)
+            def safe_div(a,b):
+                if b==0:
+                    if self.cfg.strict: raise RuntimeError("seq_div_by_zero")
+                    else: return 0
+                return a//b
+            return [budget.add_for(i) or (budget.charge(1) or 0, safe_div(L[i],R[i]))[1] for i in range(len(L))]
+
         if op=="SCAN_ADD":
-            s=0; B=[]
+            X=get_X(); s=0; B=[]
             for i,v in enumerate(X):
                 budget.add_for(i); budget.charge(1); s+=v; B.append(s)
             return B
         if op=="SCAN_MUL":
-            p=1; B=[]
+            X=get_X(); p=1; B=[]
             for i,v in enumerate(X):
                 budget.add_for(i); budget.charge(1); p*=v; B.append(p)
             return B
-        if op=="CUMMAX":
-            m=-10**18; B=[]
-            for i,v in enumerate(X):
-                budget.add_for(i); budget.charge(1); 
-                if v>m: m=v
-                B.append(m)
-            return B
-        if op=="CUMMIN":
-            m=10**18; B=[]
-            for i,v in enumerate(X):
-                budget.add_for(i); budget.charge(1); 
-                if v<m: m=v
-                B.append(m)
-            return B
         if op=="DIFF_FWD":
-            k=node.args[0];
+            X=get_X(); k=node.args[0];
             if k<0: raise RuntimeError("diff_fwd_negative_k")
             N=len(X); B=[0]*N
             upto = N-k if k<=N else 0
             for i in range(upto):
                 budget.add_for(i); budget.charge(1); B[i]=X[i+k]-X[i]
-            if self.cfg.strict and k>0:
-                raise RuntimeError("diff_fwd_tail_undefined")
+            for i in range(upto, N):
+                budget.add_for(i); budget.charge(1); B[i]=X[i]
             return B
         if op=="DIFF_BACK":
-            k=node.args[0];
+            X=get_X(); k=node.args[0];
             if k<0: raise RuntimeError("diff_back_negative_k")
             N=len(X); B=[0]*N
-            for i in range(N):
-                if i-k<0:
-                    if self.cfg.strict: raise RuntimeError("diff_back_head_undefined")
-                    else: B[i]=0; continue
+            for i in range(min(k, N)):
+                budget.add_for(i); budget.charge(1); B[i]=X[i]
+            for i in range(k, N):
                 budget.add_for(i); budget.charge(1); B[i]=X[i]-X[i-k]
             return B
-        if op=="ZIP":
-            bop, k1, k2 = node.args
-            if k1<0 or k2<0:
-                if self.cfg.strict: raise RuntimeError("zip_negative_delay")
-                else: return [0]*len(X)
-            N=len(X); B=[0]*N
-            for i in range(N):
-                j1=i-k1; j2=i-k2
-                if j1<0 or j2<0 or j1>=N or j2>=N:
-                    if self.cfg.strict: raise RuntimeError("zip_oob")
-                    else: B[i]=0; continue
-                budget.add_for(i); budget.charge(1)
-                x=X[j1]; y=X[j2]
-                if bop=="ADD": B[i]=x+y
-                elif bop=="SUB": B[i]=x-y
-                elif bop=="MUL": B[i]=x*y
-                elif bop=="MIN": B[i]=x if x<y else y
-                elif bop=="MAX": B[i]=x if x>y else y
-            return B
+            
         if op=="CONV":
-            L=node.args[0]; w=node.args[1:1+L]; N=len(X); B=[0]*N
+            X=get_X(); L=node.args[0]; w=node.args[1:1+L]; N=len(X); B=[0]*N
             for i in range(N):
                 s=0
                 for j in range(min(L, i+1)):
@@ -192,69 +207,10 @@ class Interpreter:
                 B[i]=s
             return B
         if op=="POLY":
-            D=node.args[0]; coeffs=node.args[1:1+D+1]
-            L=len(coeffs); N=len(X); B=[0]*N
-            for i in range(N):
-                s=0
-                for j in range(min(L, i+1)):
-                    budget.add_for(i); budget.charge(2)
-                    s += coeffs[j]*X[i-j]
-                B[i]=s
-            return B
-        if op=="REIDX":
-            k,b = node.args; N=len(X)
-            if k<0: raise RuntimeError("reidx_negative_k")
-            if N==0: return []
-            # Ensure all indices valid for i in [0..N-1]
-            if (k*(N-1)+b) >= N or (0*b) < 0 or (k*0+b) < 0:
-                raise RuntimeError("reidx_oob")
-            return [budget.add_for(i) or (budget.charge(1) or 0, X[k*i+b])[1] for i in range(N)]
-        if op=="SUBSAMPLE":
-            k=node.args[0]
-            if k<=0: raise RuntimeError("subsample_nonpositive_k")
-            return [budget.add_for(i) or (budget.charge(3) or 0, X[i*k])[1] for i in range(len(X)//k)]
-        if op=="REPEAT":
-            k=node.args[0];
-            if k<=0: raise RuntimeError("repeat_nonpositive_k")
-            B=[]
-            for i in range(len(X)*k):
-                budget.add_for(i); budget.charge(3); B.append(X[i//k])
-            return B
-        if op=="INDEXBY":
-            N=len(X); B=[0]*N
-            if max(X) >= N or min(X)<0: raise RuntimeError("indexby_oob")
-            for i in range(N):
-                budget.add_for(i); budget.charge(1); B[i]=X[X[i]]
-            return B
-        if op=="DROP":
-            k=node.args[0]; 
-            if len(X)<=k: return []
-            B=[]
-            for i in range(len(X)-k):
-                budget.add_for(i); budget.charge(1); B.append(X[i+k])
-            return B
-        if op=="INSERT1":
-            c=node.args[0]; N=len(X); 
-            if N==0: return []
-            Y=[0]*N
-            for i in range(N):
-                budget.add_for(i); budget.charge(1)
-                if i==0: Y[i]=X[0]
-                elif i==1: Y[i]=c
-                else: Y[i]=X[i-1]
-            return Y
-        if op=="INSERT2":
-            c=node.args[0]; N=len(X); 
-            if N==0: return []
-            Y=[0]*N
-            for i in range(N):
-                budget.add_for(i); budget.charge(1)
-                if i<2: Y[i]=X[i]
-                elif i==2: Y[i]=c
-                else: Y[i]=X[i-1]
-            return Y
+            X=get_X(); a,b,c = node.args
+            return [budget.add_for(i) or (budget.charge(3) or 0, a*X[i]*X[i] + b*X[i] + c)[1] for i in range(len(X))]
         if op=="BINOM":
-            N=len(X); B=[0]*N
+            X=get_X(); N=len(X); B=[0]*N
             row=[0]*(N+1); row[0]=1
             B[0]=row[0]*X[0]
             for n in range(1,N):
@@ -266,7 +222,7 @@ class Interpreter:
                 B[n]=s
             return B
         if op=="IBINOM":
-            N=len(X); B=[0]*N
+            X=get_X(); N=len(X); B=[0]*N
             row=[0]*(N+1); row[0]=1
             B[0]=row[0]*X[0]
             for n in range(1,N):
@@ -279,7 +235,7 @@ class Interpreter:
                 B[n]=s
             return B
         if op=="EULER":
-            N=len(X); 
+            X=get_X(); N=len(X); 
             if N==0: return []
             B=[0]*N; B[0]=1; c=[0]*N
             for d in range(1,N):
@@ -297,21 +253,90 @@ class Interpreter:
                     raise RuntimeError("euler_non_integer")
                 B[n] = s//n
             return B
+
+        if op=="SHIFT":
+            X=get_X(); k=node.args[0]
+            N=len(X); B=[0]*N
+            for i in range(N):
+                budget.add_for(i); budget.charge(1)
+                idx = i-k
+                if idx < 0 or idx >= N: B[i]=0
+                else: B[i]=X[idx]
+            return B
+        if op=="REIDX":
+            X=get_X(); k,b = node.args; N=len(X)
+            if k<0: raise RuntimeError("reidx_negative_k")
+            if N==0: return []
+            B=[0]*N
+            for i in range(N):
+                budget.add_for(i); budget.charge(1)
+                idx = k*i+b
+                if idx < 0 or idx >= N: B[i]=0
+                else: B[i]=X[idx]
+            return B
+        if op=="SUBSAMPLE":
+            X=get_X(); k=node.args[0]
+            if k<=0: raise RuntimeError("subsample_nonpositive_k")
+            return [budget.add_for(i) or (budget.charge(3) or 0, X[i*k])[1] for i in range(len(X)//k)]
+        if op=="REPEAT":
+            X=get_X(); k=node.args[0];
+            if k<=0: raise RuntimeError("repeat_nonpositive_k")
+            B=[]
+            for i in range(len(X)*k):
+                budget.add_for(i); budget.charge(3); B.append(X[i//k])
+            return B
+        if op=="DROP":
+            X=get_X(); k=node.args[0]; 
+            if len(X)<=k: return []
+            B=[]
+            for i in range(len(X)-k):
+                budget.add_for(i); budget.charge(1); B.append(X[i+k])
+            return B
+        if op=="DROP_AT_2":
+            X=get_X(); N=len(X)
+            if N<=1: return X
+            B=[]
+            for i in range(N):
+                if i==1: continue
+                budget.add_for(len(B)); budget.charge(1); B.append(X[i])
+            return B
+        if op=="INSERT1":
+            X=get_X(); c=node.args[0]; N=len(X); 
+            if N==0: return []
+            Y=[0]*N
+            for i in range(N):
+                budget.add_for(i); budget.charge(1)
+                if i==0: Y[i]=X[0]
+                elif i==1: Y[i]=c
+                else: Y[i]=X[i-1]
+            return Y
+        if op=="INSERT2":
+            X=get_X(); c=node.args[0]; N=len(X); 
+            if N==0: return []
+            Y=[0]*N
+            for i in range(N):
+                budget.add_for(i); budget.charge(1)
+                if i<2: Y[i]=X[i]
+                elif i==2: Y[i]=c
+                else: Y[i]=X[i-1]
+            return Y
+
         if op=="PRED_POS":
-            return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]>0 else 0)[1] for i in range(len(X))]
+            X=get_X(); return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]>0 else 0)[1] for i in range(len(X))]
         if op=="PRED_NEG":
-            return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]<0 else 0)[1] for i in range(len(X))]
+            X=get_X(); return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]<0 else 0)[1] for i in range(len(X))]
         if op=="PRED_IS_EVEN_N":
+            # this predicate depends on index only, but we iterate over A to match length
             N=len(A)
             return [ (budget.add_for(i) or (budget.charge(1) or 0, 1 if (i%2==0) else 0)[1]) for i in range(N) ]
         if op=="PRED_EQ_CONST":
-            c=node.args[0]; return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]==c else 0)[1] for i in range(len(X))]
+            X=get_X(); c=node.args[0]; return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]==c else 0)[1] for i in range(len(X))]
         if op=="PRED_GT_CONST":
-            c=node.args[0]; return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]>c else 0)[1] for i in range(len(X))]
+            X=get_X(); c=node.args[0]; return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]>c else 0)[1] for i in range(len(X))]
         if op=="PRED_LT_CONST":
-            c=node.args[0]; return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]<c else 0)[1] for i in range(len(X))]
+            X=get_X(); c=node.args[0]; return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]<c else 0)[1] for i in range(len(X))]
         if op=="PRED_NOT":
-            P=X; return [budget.add_for(i) or (budget.charge(1) or 0, 0 if P[i]!=0 else 1)[1] for i in range(len(P))]
+            X=get_X(); P=X; return [budget.add_for(i) or (budget.charge(1) or 0, 0 if P[i]!=0 else 1)[1] for i in range(len(P))]
         if op=="PRED_AND":
             L=self._eval(node.kids[0], A, budget); R=self._eval(node.kids[1], A, budget)
             return [budget.add_for(i) or (budget.charge(1) or 0, 1 if (L[i]!=0 and R[i]!=0) else 0)[1] for i in range(len(L))]
@@ -326,4 +351,5 @@ class Interpreter:
             for i in range(N):
                 budget.add_for(i); budget.charge(1); B[i]=T[i] if P[i]!=0 else E[i]
             return B
+            
         raise RuntimeError(f"unknown_op:{op}")

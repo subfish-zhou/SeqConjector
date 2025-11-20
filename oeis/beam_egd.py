@@ -16,7 +16,7 @@ class GrammarState:
         fr={"op":op,"need_args":args,"kids":kids,"mode":None}
         if op=="ZIP": fr["need_args"]=3; fr["mode"]="ZIP_HEAD"
         if op=="CONV": fr["need_args"]=1; fr["mode"]="CONV_LEN"
-        if op=="POLY": fr["need_args"]=1; fr["mode"]="POLY_DEG"
+        if op=="MAP_DIV": fr["need_args"]=1; fr["mode"]="MAP_DIV_ARG"
         self.stack.append(fr); self.expect_op=(fr["need_args"]==0 and fr["kids"]>0)
     def feed(self, tok:str)->bool:
         if self.expect_op:
@@ -37,10 +37,11 @@ class GrammarState:
                 if not (1<=v<=5): return False
                 fr["mode"]="CONV_W"; fr["need_args"]=v
                 self.expect_op=False; return True
-            if fr["op"]=="POLY" and fr["mode"]=="POLY_DEG":
-                if not (0<=v<=4): return False
-                fr["mode"]="POLY_C"; fr["need_args"]=v+1
-                self.expect_op=False; return True
+            if fr["op"]=="MAP_DIV" and fr["mode"]=="MAP_DIV_ARG":
+                if v==0: return False
+                fr["need_args"]=0; self.expect_op=False
+                if fr["kids"]>0: self.expect_op=True
+                return True
             fr["need_args"]-=1; self.expect_op=(fr["need_args"]==0 and fr["kids"]>0)
         changed=True
         while changed and self.stack:
@@ -85,9 +86,9 @@ class GrammarState:
         if fr["op"] == "CONV" and fr.get("mode") == "CONV_LEN" and fr["need_args"] == 1:
             return [str(i) for i in range(1, 6)]  # 1..5
 
-        # POLY: 次数
-        if fr["op"] == "POLY" and fr.get("mode") == "POLY_DEG" and fr["need_args"] == 1:
-            return [str(i) for i in range(0, 5)]  # 0..4
+        # MAP_DIV: 除数不能为 0
+        if fr["op"] == "MAP_DIV" and fr.get("mode") == "MAP_DIV_ARG" and fr["need_args"] == 1:
+            return [str(i) for i in range(-16, 17) if i!=0]
 
         # 默认整数常量范围
         return [str(i) for i in range(-16, 17)]
@@ -184,6 +185,9 @@ def egd_beam_search(model, A_vis, B_vis, beam=256, max_steps=96,
             if lp > 0:
                 try:
                     prog = parse_prefix(h.toks[:lp])
+                    # 检查程序是否包含 A
+                    if not prog.contains_A():
+                        continue
                     rL = inter_loose.execute(prog, A_vis)
                     if rL.ok and rL.seq is not None and len(rL.seq) >= len(B_vis):
                         # 严格前缀校验：提前淘汰越界/未定义

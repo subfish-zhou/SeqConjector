@@ -171,3 +171,4 @@ azure_api.py
 deprecated/
 oeis_seq_labeled/
 *.zip
+_d/

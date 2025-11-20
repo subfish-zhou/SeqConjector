@@ -5,11 +5,13 @@ from typing import List
 import numpy as np
 
 OPS = [
-    "A","SCALE","OFFSET","MAP_ABS","MAP_SGN","MAP_MOD",
+    "A",
+    "SCALE","OFFSET","MAP_ABS","MAP_SGN","MAP_MOD","MAP_DIV","MAP_SQRT",
+    "SEQ_ADD","SEQ_SUB","SEQ_MUL","SEQ_DIV",
+    "SCAN_ADD","SCAN_MUL","DIFF_FWD","DIFF_BACK",
+    "CONV","POLY","BINOM","IBINOM","EULER",
+    "SHIFT","REIDX","SUBSAMPLE","REPEAT","DROP","DROP_AT_2","INSERT1","INSERT2",
     "MAP_TAU","MAP_SIGMA","MAP_PHI","MAP_MU","MAP_OMEGA","MAP_BIGOMEGA",
-    "SCAN_ADD","SCAN_MUL","CUMMAX","CUMMIN","DIFF_FWD","DIFF_BACK",
-    "ZIP","CONV","POLY","REIDX","SUBSAMPLE","REPEAT",
-    "INDEXBY","BINOM","IBINOM","EULER","DROP","INSERT1","INSERT2",
     "PRED_POS","PRED_NEG","PRED_IS_EVEN_N","PRED_EQ_CONST","PRED_GT_CONST","PRED_LT_CONST",
     "PRED_NOT","PRED_AND","PRED_OR","COND",
     "<BOS>","<EOS>"
@@ -27,7 +29,12 @@ def cheap_features(A: List[int], B: List[int]):
         k=0.0; c=float(np.mean(b)) if len(b)>0 else 0.0
     else:
         A1 = np.vstack([a, np.ones(len(a))]).T
-        k,c = np.linalg.lstsq(A1, b, rcond=None)[0]
+        try:
+            k, c = np.linalg.lstsq(A1, b, rcond=None)[0]
+        except (np.linalg.LinAlgError, ValueError, OverflowError):
+            # Fallback: use zero slope and mean intercept when fitting fails (e.g., overflow / singular matrix)
+            k = 0.0
+            c = float(np.mean(b)) if len(b) > 0 else 0.0
     k = float(np.clip(k, -10, 10)); c = float(np.clip(c, -100, 100))
     db = np.zeros_like(b); 
     if len(b)>0: db[0]=b[0]
