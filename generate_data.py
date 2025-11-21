@@ -1,7 +1,6 @@
-import argparse, random, json, torch, math, glob, os, time, multiprocessing
+import argparse, random, json, math, glob, os, time, multiprocessing
 from oeis.program import Node, Program
-from oeis.interpreter import Interpreter, ExecConfig
-from oeis.torch_model import stoi, TOKENS, cheap_features
+from oeis.config import Config
 from oeis.split_utils import compute_split
 
 # ==========================================
@@ -172,7 +171,10 @@ def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficu
         # Re-instantiate locally to avoid sharing issues
         pool = RealSequencePool()
         prog_gen = ProgramGenerator()
-        inter = Interpreter(ExecConfig(strict=False, t0=20, t_step=5))
+        # Use loose budget for data generation (allows more complex programs)
+        inter_config = Config.get_interpreter_config(strict=False, loose_budget=True)
+        from oeis.interpreter import Interpreter
+        inter = Interpreter(inter_config)
         
         prob_long = 0.1 + 0.6 * difficulty 
 
@@ -219,6 +221,10 @@ def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficu
                      max_l = random.randint(2, 4)
                      
                 P = prog_gen.generate(max_depth=max_d, max_len=max_l)
+                
+                # Check that program contains A (required by system design)
+                if not P.contains_A():
+                    continue
                 
                 # 3. Execute
                 r = inter.execute(P, A_full)

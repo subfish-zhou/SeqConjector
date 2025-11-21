@@ -6,6 +6,9 @@ import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
 
+# Import safe utility functions
+from .utils import safe_corrcoef, safe_ratio, safe_log
+
 OPS = [
     "A",
     "SCALE","OFFSET","MAP_ABS","MAP_SGN","MAP_MOD","MAP_DIV","MAP_SQRT",
@@ -68,17 +71,9 @@ def _kendalltau(x, y):
 # Feature extraction
 # =============================================================================
 
-def _safe_ratio(x, y, default=0.0):
-    """Safely compute ratio with clipping"""
-    if abs(y) < 1e-12:
-        return default
-    return float(np.clip(x / y, -100, 100))
-
-def _safe_log(x, default=0.0):
-    """Safely compute log10 with clipping"""
-    if x <= 0:
-        return default
-    return float(np.clip(np.log10(abs(x) + 1e-12), -10, 10))
+# Use shared safe functions from utils module
+_safe_ratio = safe_ratio
+_safe_log = safe_log
 
 def _r_squared(x, y):
     """Compute R-squared coefficient of determination"""
@@ -301,8 +296,9 @@ def enhanced_features(A: List[int], B: List[int]) -> torch.Tensor:
         features.extend([0.0] * 12)
     else:
         try:
-            pearson = float(np.corrcoef(a, b)[0, 1])
-            features.append(0.0 if np.isnan(pearson) else pearson)
+            # Use safe_corrcoef from utils
+            pearson = safe_corrcoef(a, b)
+            features.append(pearson)
             
             try:
                 spearman_val = float(_spearmanr(a, b))
@@ -331,8 +327,9 @@ def enhanced_features(A: List[int], B: List[int]) -> torch.Tensor:
                 else:
                     va = a[d:]
                     vb = b[d:]
-                    c = np.corrcoef(va, vb)[0, 1]
-                    features.append(0.0 if np.isnan(c) else float(c))
+                    # Use safe_corrcoef from utils
+                    c = safe_corrcoef(va, vb)
+                    features.append(c)
             
             dtw_dist = _dtw_distance(a[:20], b[:20])
             features.append(dtw_dist)
@@ -352,17 +349,18 @@ def enhanced_features(A: List[int], B: List[int]) -> torch.Tensor:
             h1 = n // 2
             q3 = 3 * n // 4
             
-            corr_q1 = float(np.corrcoef(a[:q1], b[:q1])[0, 1] if q1 > 1 else 0.0)
-            features.append(0.0 if np.isnan(corr_q1) else corr_q1)
+            # Use safe_corrcoef from utils
+            corr_q1 = safe_corrcoef(a[:q1], b[:q1]) if q1 > 1 else 0.0
+            features.append(corr_q1)
             
-            corr_h1 = float(np.corrcoef(a[:h1], b[:h1])[0, 1] if h1 > 1 else 0.0)
-            features.append(0.0 if np.isnan(corr_h1) else corr_h1)
+            corr_h1 = safe_corrcoef(a[:h1], b[:h1]) if h1 > 1 else 0.0
+            features.append(corr_h1)
             
-            corr_h2 = float(np.corrcoef(a[h1:], b[h1:])[0, 1] if n-h1 > 1 else 0.0)
-            features.append(0.0 if np.isnan(corr_h2) else corr_h2)
+            corr_h2 = safe_corrcoef(a[h1:], b[h1:]) if n-h1 > 1 else 0.0
+            features.append(corr_h2)
             
-            corr_q4 = float(np.corrcoef(a[q3:], b[q3:])[0, 1] if n-q3 > 1 else 0.0)
-            features.append(0.0 if np.isnan(corr_q4) else corr_q4)
+            corr_q4 = safe_corrcoef(a[q3:], b[q3:]) if n-q3 > 1 else 0.0
+            features.append(corr_q4)
             
             segment_consistency = abs(corr_h1 - corr_h2)
             features.append(segment_consistency)
@@ -443,12 +441,10 @@ def enhanced_features(A: List[int], B: List[int]) -> torch.Tensor:
             
             if len(a) >= 4:
                 h = len(a) // 2
-                corr_h1 = np.corrcoef(a[:h], b[:h])[0, 1] if h > 1 else 0.0
-                corr_h2 = np.corrcoef(a[h:], b[h:])[0, 1] if len(a) - h > 1 else 0.0
-                if not np.isnan(corr_h1) and not np.isnan(corr_h2):
-                    is_piecewise = 1.0 if abs(corr_h1 - corr_h2) > 0.5 else 0.0
-                else:
-                    is_piecewise = 0.0
+                # Use safe_corrcoef from utils
+                corr_h1 = safe_corrcoef(a[:h], b[:h]) if h > 1 else 0.0
+                corr_h2 = safe_corrcoef(a[h:], b[h:]) if len(a) - h > 1 else 0.0
+                is_piecewise = 1.0 if abs(corr_h1 - corr_h2) > 0.5 else 0.0
             else:
                 is_piecewise = 0.0
             features.append(is_piecewise)

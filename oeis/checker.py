@@ -50,8 +50,6 @@ def check_program_moonshine(tokens: List[str], A_full: List[int], B_full: List[i
                             k_strict:int=3, tau0:float=2e-3, tau1:float=1e-3, use_log:bool=True) -> CheckReport:
     if n_in + n_chk > min(len(A_full), len(B_full)):
         return CheckReport(False, False, False, f"prefix+chk={n_in+n_chk} exceeds min length {min(len(A_full), len(B_full))}", tokens, 0, 0, None)
-    from .parser import parse_prefix
-    from .interpreter import Interpreter, ExecConfig
     N2 = n_in + n_chk
     try:
         P = parse_prefix(tokens)

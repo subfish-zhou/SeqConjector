@@ -45,11 +45,6 @@ class Interpreter:
         op=node.op
         if op=="A": return A
         
-        # Lazy evaluation of children
-        kids_eval = []
-        # For performance, most ops are unary, some binary/ternary
-        # We won't evaluate kids here globally, but let ops do it.
-        
         # Helper to eval kid 0
         def get_X(): 
             return self._eval(node.kids[0], A, budget) if node.kids else A
@@ -208,6 +203,9 @@ class Interpreter:
                 budget.add_for(len(B)); budget.charge(1); B.append(X[i])
             return B
         if op=="INSERT1":
+            # INSERT1 c X: Insert constant c at position 1 (second element)
+            # Result: [X[0], c, X[1], X[2], ..., X[N-2]]
+            # Length is preserved (X[N-1] is dropped)
             X=get_X(); c=node.args[0]; N=len(X); 
             if N==0: return []
             Y=[0]*N
@@ -218,6 +216,9 @@ class Interpreter:
                 else: Y[i]=X[i-1]
             return Y
         if op=="INSERT2":
+            # INSERT2 c X: Insert constant c at position 2 (third element)
+            # Result: [X[0], X[1], c, X[2], X[3], ..., X[N-2]]
+            # Length is preserved (X[N-1] is dropped)
             X=get_X(); c=node.args[0]; N=len(X); 
             if N==0: return []
             Y=[0]*N

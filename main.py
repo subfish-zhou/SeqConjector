@@ -5,14 +5,18 @@ from oeis.parser import parse_prefix
 from oeis.interpreter import Interpreter, ExecConfig
 from oeis.checker import check_program_on_pair, check_program_moonshine
 from oeis.beam_egd import egd_beam_search, longest_prefix_parse
-from oeis.torch_model import Cfg, TransDecoder, stoi, itos, TOKENS, cheap_features
+from oeis.torch_model import Cfg, TransDecoder, stoi, itos, TOKENS, enhanced_features
 from oeis.split_utils import compute_split
+from oeis.logging_config import setup_logger
+
+# 设置日志
+logger = setup_logger("main", level="INFO")
 
 def try_templates_moonshine(A, B, n_in, n_chk, k_strict=3, tau0=2e-3, tau1=1e-3):
     """
     模板集合：SCAN_ADD A；INSERT1 B[1] (SCAN_ADD A)；INSERT2 B[2] (SCAN_ADD A)
     逻辑：只要有模板通过 moonshine 检验，立刻返回；
-         否则返回“尾部误差最小”的那个模板（兜底），其 rep.ok=False，供上层继续走 beam。
+         否则返回"尾部误差最小"的那个模板（兜底），其 rep.ok=False，供上层继续走 beam。
     """
     N2 = n_in + n_chk
     cands = []
@@ -30,9 +34,7 @@ def try_templates_moonshine(A, B, n_in, n_chk, k_strict=3, tau0=2e-3, tau1=1e-3)
         toks3 = ["INSERT2", str(c), "SCAN_ADD", "A"]
         cands.append(("INS2", toks3))
 
-    from oeis.checker import check_program_moonshine
     best = None  # (rmse, toks, rep)
-    import math
 
     for tag, toks in cands:
         rep = check_program_moonshine(
@@ -96,20 +98,19 @@ def cmd_eval(args):
         n_in, n_chk = compute_split(min_len)
         if args.n_in is None: args.n_in = n_in
         if args.n_chk is None: args.n_chk = n_chk
+        logger.info(f"Auto-computed split: n_in={n_in}, n_chk={n_chk}")
     
     if args.moonshine:
         rep = check_program_moonshine(toks, A_full=A, B_full=B, n_in=args.n_in, n_chk=args.n_chk,
                                       k_strict=args.k_strict, tau0=args.relerr0, tau1=args.relerr_step)
     else:
         rep = check_program_on_pair(toks, A_full=A, B_full=B, n_in=args.n_in, n_chk=args.n_chk)
+    
+    # 输出结果（保留print以便于重定向）
     print(rep)
+    logger.info(f"Evaluation result: {rep.ok}")
 
 def cmd_beam(args):
-    # 这些工具通常在本文件已有全局导入；若没有则取消下面两行注释
-    # from oeis.checker import check_program_on_pair, check_program_moonshine
-    # from oeis.beam_egd import egd_beam_search
-    # from oeis.torch_model import TorchAdapter, RandomAdapter
-
     A = json.load(open(args.A)); B = json.load(open(args.B))
     
     # Auto-compute split if not provided
@@ -121,8 +122,35 @@ def cmd_beam(args):
     
     n_in, n_chk = args.n_in, args.n_chk
     if n_in + n_chk > min(len(A), len(B)):
-        print(f"[WARN] n_in+n_chk={n_in+n_chk} exceeds min length {min(len(A),len(B))}, shrinking n_chk")
+        logger.warning(f"n_in+n_chk={n_in+n_chk} exceeds min length {min(len(A),len(B))}, shrinking n_chk")
         n_chk = max(0, min(len(A), len(B)) - n_in)
+
+    # Compute features once (used by template matching)
+    A_vis, B_vis = A[:n_in], B[:n_in]
+    feat = enhanced_features(A_vis, B_vis)  # 54-dim
+    
+    # 0) Feature-driven template matching (NEW - fastest path)
+    from oeis.template_matcher import try_feature_templates
+    t_feat_tpl0 = time.time()
+    toks_feat, rep_feat = try_feature_templates(
+        A, B, feat, n_in, n_chk,
+        checker_mode="moonshine" if args.moonshine else "exact",
+        k_strict=args.k_strict,
+        tau0=args.relerr0,
+        tau1=args.relerr_step,
+        max_templates=10  # Try top 10 templates
+    )
+    t_feat_tpl = time.time() - t_feat_tpl0
+    
+    if toks_feat and rep_feat and rep_feat.ok:
+        logger.info(f"Feature template match: {' '.join(toks_feat)}")
+        print("PRED(FEAT_TPL):", " ".join(toks_feat))
+        print("CHECK(FEAT_TPL):", rep_feat)
+        print(f"TIME feat_tpl={t_feat_tpl:.3f}s")
+        return
+    else:
+        logger.info(f"Feature templates failed after {t_feat_tpl:.3f}s, trying moonshine templates...")
+        print(f"[INFO] Feature templates failed after {t_feat_tpl:.3f}s, trying moonshine templates...")
 
     # 1) 模板快速路径（Moonshine）：总是打印模板耗时；仅在通过时 return
     if args.moonshine:
@@ -133,6 +161,7 @@ def cmd_beam(args):
         )
         t_tpl = time.time() - t_tpl0
         if toks0:
+            logger.info(f"Moonshine template: {' '.join(toks0)}, ok={rep0.ok if rep0 else False}")
             print("PRED(TPL):", " ".join(toks0))
             print("CHECK(TPL):", rep0)
             print(f"TIME tpl={t_tpl:.3f}s")  # 无论 rep0.ok 与否都打印
@@ -140,7 +169,6 @@ def cmd_beam(args):
                 return  # 模板直接命中则退出；否则继续进入束搜
 
     # 2) 束搜（EGD）
-    A_vis, B_vis = A[:n_in], B[:n_in]
     if args.ckpt:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model = TorchAdapter(args.ckpt, device=device)
@@ -159,6 +187,7 @@ def cmd_beam(args):
         time_limit=args.time_limit
     )
     t_beam = time.time() - t_beam0
+    logger.info(f"Beam search completed: {len(toks)} tokens in {t_beam:.3f}s")
     print("PRED:", " ".join(toks))
 
     # 3) 校验 + 打印耗时（无论通过与否）
@@ -175,6 +204,7 @@ def cmd_beam(args):
             n_in=n_in, n_chk=n_chk
         )
     t_check = time.time() - t_chk0
+    logger.info(f"Check result: {rep.ok}, time={t_check:.3f}s")
     print("CHECK:", rep)
     print(f"TIME beam={t_beam:.3f}s check={t_check:.3f}s total={(t_beam+t_check):.3f}s")
 

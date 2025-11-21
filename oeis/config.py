@@ -1,0 +1,127 @@
+"""
+集中管理 SeqConjector 项目的所有配置参数
+"""
+
+class Config:
+    """全局配置类"""
+    
+    # ==================== Interpreter 配置 ====================
+    # 执行预算参数
+    BUDGET_T0 = 10           # 基础时间预算
+    BUDGET_T_STEP = 3        # 每个元素的时间步长
+    
+    # 宽松模式预算（用于数据生成，允许更复杂的程序）
+    BUDGET_T0_LOOSE = 20
+    BUDGET_T_STEP_LOOSE = 5
+    
+    # ==================== Beam Search 配置 ====================
+    DEFAULT_BEAM_SIZE = 256
+    DEFAULT_MAX_STEPS = 96
+    DEFAULT_TIME_LIMIT = 10.0  # 秒
+    
+    # ==================== Moonshine 配置 ====================
+    # 严格匹配的前k项
+    K_STRICT = 3
+    
+    # 相对误差阈值
+    RELERR0 = 2e-3           # 初始阈值
+    RELERR_STEP = 1e-3       # 每步增长
+    RELERR_HI = 0.10         # 高阈值
+    
+    # ==================== 特征提取配置 ====================
+    FEATURE_DIM = 54         # enhanced_features 输出维度
+    
+    # ==================== 模型配置 ====================
+    # Transformer参数
+    D_MODEL = 256
+    NHEAD = 4
+    NLAYERS = 4
+    D_FF = 1024
+    DROPOUT = 0.1
+    CTX_LEN = 64
+    
+    # ==================== 训练配置 ====================
+    DEFAULT_LR = 3e-4
+    DEFAULT_BATCH_SIZE = 128
+    DEFAULT_STEPS = 20000
+    LAMBDA_EXEC = 0.1        # 执行损失权重
+    
+    # ==================== 数据生成配置 ====================
+    # 序列长度
+    MIN_SEQ_LEN = 7
+    MAX_SEQ_LEN_SYNTHETIC = 30
+    
+    # 程序生成参数
+    MAX_PROG_DEPTH = 3
+    MAX_PROG_LENGTH = 8
+    
+    # Moonshine数据比例
+    DEFAULT_MOONSHINE_PROB = 0.1
+    
+    # ==================== 路径配置 ====================
+    OEIS_DATA_DIR = "oeis_seq_labeled/formula_true"
+    DEFAULT_DATA_GEN_DIR = "data_gen"
+    DEFAULT_CHECKPOINT = "ckpt.pt"
+    
+    # ==================== 整数常量范围 ====================
+    # 用于词表和采样
+    INT_MIN = -16
+    INT_MAX = 16
+    
+    # 训练时采样的INSERT常量范围（更小，避免超出词表）
+    INSERT_CONST_MIN = -8
+    INSERT_CONST_MAX = 8
+    
+    # ==================== 模板匹配配置 ====================
+    MAX_FEATURE_TEMPLATES = 10  # 尝试的最大模板数
+    
+    # ==================== 测试配置 ====================
+    TEST_TIMEOUT = 1.0       # run_test中的超时（秒）
+    TEST_WORKERS = 0         # 0表示使用CPU数量
+    
+    # ==================== Split配置 ====================
+    # compute_split的规则
+    SHORT_SEQ_THRESHOLD = 10  # 短序列阈值
+    SHORT_SEQ_VALIDATE = 2    # 短序列的验证项数
+    LONG_SEQ_VALIDATE_RATIO = 0.3  # 长序列的验证比例
+    
+    @classmethod
+    def get_interpreter_config(cls, strict=True, loose_budget=False):
+        """
+        获取Interpreter的ExecConfig
+        
+        Args:
+            strict: 是否使用严格模式
+            loose_budget: 是否使用宽松预算（用于数据生成）
+        
+        Returns:
+            ExecConfig实例
+        """
+        from .interpreter import ExecConfig
+        
+        if loose_budget:
+            return ExecConfig(
+                strict=strict,
+                t0=cls.BUDGET_T0_LOOSE,
+                t_step=cls.BUDGET_T_STEP_LOOSE
+            )
+        else:
+            return ExecConfig(
+                strict=strict,
+                t0=cls.BUDGET_T0,
+                t_step=cls.BUDGET_T_STEP
+            )
+    
+    @classmethod
+    def get_model_config(cls):
+        """获取模型配置字典"""
+        return {
+            "d_model": cls.D_MODEL,
+            "nhead": cls.NHEAD,
+            "nlayers": cls.NLAYERS,
+            "d_ff": cls.D_FF,
+            "dropout": cls.DROPOUT,
+            "ctx_len": cls.CTX_LEN,
+            "feat_dim": cls.FEATURE_DIM
+        }
+

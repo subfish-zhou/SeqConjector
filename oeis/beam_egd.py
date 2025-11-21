@@ -1,10 +1,9 @@
 
-from dataclasses import dataclass
 from typing import List
 import numpy as np, math, time
 from .parser import OPS_SIG, parse_prefix
 from .interpreter import Interpreter, ExecConfig
-from .torch_model import stoi, itos, TOKENS, cheap_features
+from .torch_model import stoi, TOKENS
 
 class GrammarState:
     def __init__(self):
@@ -14,7 +13,6 @@ class GrammarState:
     def push(self, op:str):
         args,kids = OPS_SIG[op]
         fr={"op":op,"need_args":args,"kids":kids,"mode":None}
-        if op=="CONV": fr["need_args"]=1; fr["mode"]="CONV_LEN"
         if op=="MAP_DIV": fr["need_args"]=1; fr["mode"]="MAP_DIV_ARG"
         self.stack.append(fr); self.expect_op=(fr["need_args"]==0 and fr["kids"]>0)
     def feed(self, tok:str)->bool:
@@ -27,10 +25,6 @@ class GrammarState:
             if fr["need_args"]<=0: return False
             try: v=int(tok)
             except: return False
-            if fr["op"]=="CONV" and fr["mode"]=="CONV_LEN":
-                if not (1<=v<=5): return False
-                fr["mode"]="CONV_W"; fr["need_args"]=v
-                self.expect_op=False; return True
             if fr["op"]=="MAP_DIV" and fr["mode"]=="MAP_DIV_ARG":
                 if v==0: return False
                 fr["need_args"]=0; self.expect_op=False
@@ -54,7 +48,6 @@ class GrammarState:
         """
         语法感知的候选集生成：
         - 期待 op 时：仅返回 DSL 操作符；
-        - 期待 CONV 的长度：仅 {1..5}；
         - 其他需要整数的地方：默认 {-16..16}。
         """
         if self.expect_op:
@@ -65,10 +58,6 @@ class GrammarState:
             return []
 
         fr = self.stack[-1]
-
-        # CONV: 长度
-        if fr["op"] == "CONV" and fr.get("mode") == "CONV_LEN" and fr["need_args"] == 1:
-            return [str(i) for i in range(1, 6)]  # 1..5
 
         # MAP_DIV: 除数不能为 0
         if fr["op"] == "MAP_DIV" and fr.get("mode") == "MAP_DIV_ARG" and fr["need_args"] == 1:
@@ -85,10 +74,6 @@ def longest_prefix_parse(tokens: List[str]) -> int:
         except: pass
     return 0
 
-@dataclass
-class Hyp:
-    toks: List[str]; logp: float; state: GrammarState
-
 def egd_beam_search(model, A_vis, B_vis, beam=256, max_steps=96,
                     use_ratio=True, k_strict=3,
                     err_thr_lo=0.02, err_thr_hi=0.10,
@@ -99,13 +84,9 @@ def egd_beam_search(model, A_vis, B_vis, beam=256, max_steps=96,
     2) 记录 best_by_err（rmse 最小的可解析前缀），作为最终兜底，避免回退到 `A`。
     """
     import time, math, numpy as np
-    from .interpreter import Interpreter, ExecConfig
-    from .parser import parse_prefix
-    from .torch_model import stoi, TOKENS, cheap_features
 
     inter_loose   = Interpreter(ExecConfig(strict=False, t0=10, t_step=3))
     inter_strict  = Interpreter(ExecConfig(strict=True,  t0=10, t_step=3))
-    feat = cheap_features(A_vis, B_vis)
 
     class Hyp:
         __slots__ = ("toks","logp","state")
@@ -129,15 +110,6 @@ def egd_beam_search(model, A_vis, B_vis, beam=256, max_steps=96,
                 out = self.m.model(x, f)[0, -1, :].detach().cpu().numpy()
             return out
 
-    def longest_prefix_parse(tokens):
-        for i in range(len(tokens), 0, -1):
-            try:
-                parse_prefix(tokens[:i])
-                return i
-            except:
-                pass
-        return 0
-
     def prefix_error(y_hat, y_true):
         K = min(k_strict, len(y_true))
         ok_head = (len(y_hat) >= K) and all(y_hat[i] == y_true[i] for i in range(K))
@@ -153,7 +125,6 @@ def egd_beam_search(model, A_vis, B_vis, beam=256, max_steps=96,
         return ok_head, rmse, thr
 
     mw = MWrap(model)
-    from .beam_egd import GrammarState  # 本文件内定义
 
     hyps = [Hyp([], 0.0, GrammarState())]
     finished = []
@@ -207,9 +178,8 @@ def egd_beam_search(model, A_vis, B_vis, beam=256, max_steps=96,
                 continue
             idx = np.argpartition(-masked, topk - 1)[:topk]
             vals = masked[idx]
-            from .torch_model import TOKENS as _TOKENS
             for v, i in zip(vals, idx):
-                tok = _TOKENS[int(i)]
+                tok = TOKENS[int(i)]
                 st2 = h.state.clone()
                 if not st2.feed(tok):
                     continue

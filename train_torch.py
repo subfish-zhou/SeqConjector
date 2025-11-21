@@ -5,6 +5,10 @@ from oeis.program import Node, Program
 from oeis.interpreter import Interpreter, ExecConfig
 from oeis.parser import parse_prefix
 from oeis.torch_model import Cfg, TransDecoder, stoi, TOKENS, enhanced_features
+from oeis.logging_config import setup_logger
+
+# 设置日志
+logger = setup_logger("train", level="INFO")
 
 # ==========================================
 # 1. Pre-generated Dataset
@@ -15,7 +19,7 @@ class PreGeneratedDataset(IterableDataset):
         self.files = glob.glob(os.path.join(data_dir, file_pattern))
         if not self.files:
             raise ValueError(f"No files found in {data_dir} matching {file_pattern}")
-        print(f"Found {len(self.files)} data files.")
+        logger.info(f"Found {len(self.files)} data files in {data_dir}")
         self.cycle = cycle
 
     def __iter__(self):
@@ -122,7 +126,7 @@ def main():
 
     # Check if data exists
     if not os.path.exists(args.data_dir) or not glob.glob(os.path.join(args.data_dir, "*.jsonl")):
-        print(f"Error: No data found in {args.data_dir}. Please run generate_data.py first.")
+        logger.error(f"No data found in {args.data_dir}. Please run generate_data.py first.")
         return
 
     ds = PreGeneratedDataset(data_dir=args.data_dir)
@@ -132,7 +136,7 @@ def main():
     model = TransDecoder(Cfg(), vocab=len(TOKENS)).to(device)
     
     if os.path.exists(args.out):
-        print(f"Resuming from {args.out}...")
+        logger.info(f"Resuming from checkpoint {args.out}")
         ckpt = torch.load(args.out, map_location=device)
         model.load_state_dict(ckpt["model"])
     
@@ -143,7 +147,8 @@ def main():
 
     step=0
     model.train()
-    print(f"Start training on data from {args.data_dir}...")
+    logger.info(f"Starting training: {args.steps} steps, batch_size={args.bs}, device={device}")
+    logger.info(f"Data directory: {args.data_dir}")
 
     # Use iterator for infinite loop control
     data_iter = iter(dl)
@@ -193,13 +198,13 @@ def main():
         scaler.step(opt); scaler.update()
         
         if step % 50 == 0:
-            print(f"step {step}/{args.steps} loss {loss.item():.4f} (ce {loss_ce.item():.4f})")
+            logger.info(f"step {step}/{args.steps} loss {loss.item():.4f} (ce {loss_ce.item():.4f})")
         
         step += 1
         if step >= args.steps: break
             
     torch.save({"cfg":model.cfg.__dict__, "model":model.state_dict()}, args.out)
-    print("saved", args.out)
+    logger.info(f"Training completed. Model saved to {args.out}")
 
 if __name__ == "__main__":
     main()

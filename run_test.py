@@ -147,6 +147,8 @@ def main():
     parser.add_argument("--ckpt", default="ckpt.pt")
     parser.add_argument("--output", default="results.jsonl")
     parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--device", default="cpu", choices=["cpu", "cuda", "auto"], 
+                        help="Device to use: cpu, cuda, or auto (auto-detect)")
     parser.add_argument("--log-level", default="INFO", help="Logging level (DEBUG, INFO, WARNING, ERROR)")
     parser.add_argument("--chunk-size", type=int, default=1, help="Task chunk size for multiprocessing (smaller=better load balance)")
     args = parser.parse_args()
@@ -193,8 +195,13 @@ def main():
     num_workers = args.workers if args.workers > 0 else os.cpu_count()
     logger.info(f"Running with {num_workers} workers...")
     
-    # Check device for worker init
-    device = "cpu" # Force CPU as requested for parallelism on non-GPU server
+    # Determine device
+    if args.device == "auto":
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    else:
+        device = args.device
+    logger.info(f"Using device: {device}")
     
     results = []
     count = 0
