@@ -149,102 +149,108 @@ class ProgramGenerator:
 # ==========================================
 # 3. Parallel Worker
 # ==========================================
-def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficulty):
-    # Re-init random seed for this process
-    random.seed(seed + job_id * 9999)
-    
-    pool = RealSequencePool()
-    prog_gen = ProgramGenerator()
-    inter = Interpreter(ExecConfig(strict=False, t0=20, t_step=5))
-    
-    # Difficulty config
-    # difficulty 0.0 -> mostly short
-    # difficulty 1.0 -> mixture
-    # To pre-generate a curriculum, we can generate chunks with different difficulties
-    # Or generate a balanced mix and filter later.
-    # Let's assume we generate a mix based on the requested 'difficulty' parameter for this chunk.
-    
-    prob_long = 0.1 + 0.6 * difficulty 
+def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficulty, queue):
+    try:
+        # Re-init random seed for this process
+        random.seed(seed + job_id * 9999)
+        
+        # Re-instantiate locally to avoid sharing issues
+        pool = RealSequencePool()
+        prog_gen = ProgramGenerator()
+        inter = Interpreter(ExecConfig(strict=False, t0=20, t_step=5))
+        
+        prob_long = 0.1 + 0.6 * difficulty 
 
-    generated_count = 0
-    data = []
-    
-    # Limit attempts to avoid infinite loops if generation is hard
-    attempts = 0
-    while generated_count < num_samples and attempts < num_samples * 5:
-        attempts += 1
+        generated_count = 0
+        buffer = []
         
-        # 1. Gen A
-        if random.random() < 0.6:
-            base = pool.get_random(min_len=15)
-            if random.random() < 0.3: 
-                k = random.randint(1, 3); b = random.randint(-5, 5)
-                base = [x*k + b for x in base]
-            A_full = base
-        else:
-            N = random.randint(15, 25)
-            kind = random.choice(["nat", "squares", "randwalk", "const"])
-            if kind=="nat": A_full = [i+1 for i in range(N)]
-            elif kind=="squares": A_full = [(i+1)**2 for i in range(N)]
-            elif kind=="const": c=random.randint(1,5); A_full = [c]*N
-            else:
-                cur=0; out=[]
-                for _ in range(N):
-                    cur+=random.randint(-3,3); out.append(cur)
-                A_full = out
+        # Increase attempt limit significantly to avoid early exit on hard difficulties
+        attempts = 0
+        max_attempts = num_samples * 100 
         
-        if len(A_full) > 40: A_full = A_full[:40]
+        with open(out_file, 'w', encoding='utf-8') as f:
+            while generated_count < num_samples and attempts < max_attempts:
+                attempts += 1
+                
+                # 1. Gen A
+                if random.random() < 0.6:
+                    base = pool.get_random(min_len=15)
+                    if random.random() < 0.3: 
+                        k = random.randint(1, 3); b = random.randint(-5, 5)
+                        base = [x*k + b for x in base]
+                    A_full = base
+                else:
+                    N = random.randint(15, 25)
+                    kind = random.choice(["nat", "squares", "randwalk", "const"])
+                    if kind=="nat": A_full = [i+1 for i in range(N)]
+                    elif kind=="squares": A_full = [(i+1)**2 for i in range(N)]
+                    elif kind=="const": c=random.randint(1,5); A_full = [c]*N
+                    else:
+                        cur=0; out=[]
+                        for _ in range(N):
+                            cur+=random.randint(-3,3); out.append(cur)
+                        A_full = out
+                
+                if len(A_full) > 40: A_full = A_full[:40]
 
-        # 2. Gen Program
-        if random.random() < prob_long:
-             max_d = random.randint(3, 6)
-             max_l = random.randint(4, 8)
-        else:
-             max_d = random.randint(1, 3)
-             max_l = random.randint(2, 4)
-             
-        P = prog_gen.generate(max_depth=max_d, max_len=max_l)
-        
-        # 3. Execute
-        r = inter.execute(P, A_full)
-        if (not r.ok) or r.seq is None or len(r.seq) < 10:
-            continue
+                # 2. Gen Program
+                if random.random() < prob_long:
+                     max_d = random.randint(3, 6)
+                     max_l = random.randint(4, 8)
+                else:
+                     max_d = random.randint(1, 3)
+                     max_l = random.randint(2, 4)
+                     
+                P = prog_gen.generate(max_depth=max_d, max_len=max_l)
+                
+                # 3. Execute
+                r = inter.execute(P, A_full)
+                if (not r.ok) or r.seq is None or len(r.seq) < 10:
+                    continue
 
-        B_full = r.seq
-        
-        # 4. Moonshine
-        is_moon = (random.random() < moonshine_prob)
-        if is_moon and len(B_full) >= 12:
-            s = random.randint(4, 8)
-            gamma = random.uniform(1e-3, 5e-3)
-            for t in range(s, len(B_full)):
-                try:
-                    fac = math.exp(gamma * (t - s))
-                    val = B_full[t] * fac
-                    if abs(val) < 1e18:
-                        B_full[t] = int(round(val))
-                except: pass
-        
-        n_in = random.randint(5, min(12, len(A_full)-1))
-        toks = P.to_tokens()
-        
-        # Store minimal info
-        # A, B, toks, is_moon
-        item = {
-            "A": A_full[:n_in],
-            "B": B_full[:n_in],
-            "toks": toks,
-            "is_moon": is_moon
-        }
-        data.append(json.dumps(item))
-        generated_count += 1
+                B_full = r.seq
+                
+                # 4. Moonshine
+                is_moon = (random.random() < moonshine_prob)
+                if is_moon and len(B_full) >= 12:
+                    s = random.randint(4, 8)
+                    gamma = random.uniform(1e-3, 5e-3)
+                    for t in range(s, len(B_full)):
+                        try:
+                            fac = math.exp(gamma * (t - s))
+                            val = B_full[t] * fac
+                            if abs(val) < 1e18:
+                                B_full[t] = int(round(val))
+                        except: pass
+                
+                n_in = random.randint(5, min(12, len(A_full)-1))
+                toks = P.to_tokens()
+                
+                # Store minimal info
+                item = {
+                    "A": A_full[:n_in],
+                    "B": B_full[:n_in],
+                    "toks": toks,
+                    "is_moon": is_moon
+                }
+                buffer.append(json.dumps(item))
+                generated_count += 1
+                
+                # Flush buffer every 50 items
+                if len(buffer) >= 50:
+                    f.write("\n".join(buffer) + "\n")
+                    queue.put(len(buffer))
+                    buffer = []
 
-    # Write to file
-    with open(out_file, 'w', encoding='utf-8') as f:
-        for line in data:
-            f.write(line + "\n")
-    
-    return generated_count
+            # Flush remaining
+            if buffer:
+                f.write("\n".join(buffer) + "\n")
+                queue.put(len(buffer))
+        
+        return generated_count
+    except Exception as e:
+        print(f"Worker {job_id} failed: {e}")
+        return 0
 
 def main():
     ap = argparse.ArgumentParser()
@@ -262,39 +268,51 @@ def main():
         
     samples_per_worker = args.total_samples // args.workers
     
+    # Use Manager Queue for progress tracking
+    manager = multiprocessing.Manager()
+    queue = manager.Queue()
+    
     pool_args = []
     for i in range(args.workers):
         out_file = os.path.join(args.out_dir, f"{args.prefix}_part_{i:03d}.jsonl")
-        pool_args.append((i, samples_per_worker, args.seed, out_file, args.moonshine_prob, args.difficulty))
+        pool_args.append((i, samples_per_worker, args.seed, out_file, args.moonshine_prob, args.difficulty, queue))
         
     print(f"Generating {args.total_samples} samples with {args.workers} workers...")
     print(f"Difficulty level: {args.difficulty}")
     
     t0 = time.time()
-    # Use imap_unordered to get results as they complete for progress bar
-    # Note: worker_generate currently returns only total count after finishing.
-    # To have a real-time progress bar, workers need to yield progress or we just track completed workers.
-    # Since each worker does a large chunk, tracking completed workers is coarse but simple.
     
     import tqdm
-    completed = 0
-    total_gen = 0
     
+    # Start pool asynchronously
     with multiprocessing.Pool(args.workers) as p:
-        # We use a simple approach: just wait for workers to finish
-        # Ideally we would use a Queue to report progress, but that requires more refactoring.
-        # Given the request, let's just show a progress bar of *finished workers*.
+        # Use map_async so we can monitor queue while workers run
+        result_async = p.starmap_async(worker_generate, pool_args)
         
-        # Better: Wrap the starmap
-        results = []
-        with tqdm.tqdm(total=args.workers, desc="Workers") as pbar:
-            for res in p.starmap(worker_generate, pool_args):
-                results.append(res)
-                total_gen += res
-                pbar.update(1)
+        # Monitor queue
+        with tqdm.tqdm(total=args.total_samples, unit="sample") as pbar:
+            while not result_async.ready():
+                # Read from queue
+                try:
+                    # Drain queue
+                    while not queue.empty():
+                        n = queue.get_nowait()
+                        pbar.update(n)
+                except: pass
+                time.sleep(0.1)
+            
+            # Final drain
+            while not queue.empty():
+                n = queue.get_nowait()
+                pbar.update(n)
+                
+        # Get final results (to propagate exceptions if any)
+        results = result_async.get()
         
+    total_gen = sum(results)
     dt = time.time() - t0
     print(f"Done. Generated {total_gen} samples in {dt:.2f}s. Saved to {args.out_dir}")
+
 
 if __name__ == "__main__":
     main()
