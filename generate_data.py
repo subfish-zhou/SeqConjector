@@ -2,56 +2,65 @@ import argparse, random, json, torch, math, glob, os, time, multiprocessing
 from oeis.program import Node, Program
 from oeis.interpreter import Interpreter, ExecConfig
 from oeis.torch_model import stoi, TOKENS, cheap_features
+from oeis.split_utils import compute_split
 
 # ==========================================
-# 1. Real Sequence Pool (Reusable)
+# 1. Real Sequence Pool (On-demand)
 # ==========================================
 class RealSequencePool:
-    def __init__(self, data_dir="oeis_seq_labeled/formula_true", max_cache=3000):
+    def __init__(self, data_dir="oeis_seq_labeled/formula_true"):
         self.files = glob.glob(os.path.join(data_dir, "*.jsonl"))
-        self.cache = []
-        self.max_cache = max_cache
-        if len(self.files) > 0:
-            self._fill_cache()
-
-    def _fill_cache(self):
-        # Load a random subset of real sequences (OPTIMIZED)
-        # Reduced from 10000 to 3000 per worker to speed up initialization
-        attempts = 0
-        while len(self.cache) < self.max_cache and attempts < 50:
-            attempts += 1
-            fpath = random.choice(self.files)
+        if len(self.files) == 0:
+            print(f"Warning: No OEIS files found in {data_dir}")
+        # Pre-compute file sizes for weighted sampling
+        self.file_lines = []
+        for fpath in self.files:
             try:
                 with open(fpath, 'r', encoding='utf-8') as f:
-                    # Stream and sample instead of loading all
-                    sampled = []
-                    for i, line in enumerate(f):
-                        if random.random() < 0.05:  # 5% sampling rate
-                            sampled.append(line)
-                        if len(sampled) >= 100:
-                            break
-                    
-                    for line in sampled:
-                        try:
-                            entry = json.loads(line)
-                            seq = entry.get("seq", [])
-                            # Filter: reasonable length + no huge values
-                            if (len(seq) > 10 and len(seq) < 200 and 
-                                all(isinstance(x, int) and abs(x) < 1e12 for x in seq)):
-                                self.cache.append(seq[:50])  # Truncate
-                        except: continue
-            except: continue
-            if len(self.cache) >= self.max_cache: break
+                    num_lines = sum(1 for _ in f)
+                    self.file_lines.append((fpath, num_lines))
+            except:
+                continue
 
-    def get_random(self, min_len=15):
-        if not self.cache: return [i+1 for i in range(30)]
-        for _ in range(10):
-            seq = random.choice(self.cache)
-            if len(seq) >= min_len:
-                start = 0
-                if len(seq) > min_len + 5 and random.random() < 0.4:
-                    start = random.randint(0, len(seq) - min_len)
-                return seq[start:start+random.randint(min_len, min(len(seq)-start, 100))]
+    def get_random(self, min_len=7, max_attempts=20):
+        """Extract a random sequence on-demand without caching"""
+        if not self.file_lines:
+            return [i+1 for i in range(30)]  # Fallback
+        
+        for _ in range(max_attempts):
+            # Pick a random file
+            fpath, num_lines = random.choice(self.file_lines)
+            
+            # Pick a random line number
+            target_line = random.randint(0, num_lines - 1)
+            
+            try:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    # Skip to target line
+                    for i, line in enumerate(f):
+                        if i == target_line:
+                            try:
+                                entry = json.loads(line)
+                                seq = entry.get("seq", [])
+                                
+                                # Filter: min length + no huge values (no max length limit)
+                                if (len(seq) >= min_len and 
+                                    all(isinstance(x, int) and abs(x) < 1e12 for x in seq)):
+                                    
+                                    # Optionally extract a substring (for very long sequences)
+                                    if len(seq) > 50 and random.random() < 0.3:
+                                        start = random.randint(0, len(seq) - min_len)
+                                        end = start + random.randint(min_len, min(len(seq) - start, 100))
+                                        return seq[start:end]
+                                    else:
+                                        return seq  # Return full sequence (no truncation)
+                            except:
+                                break
+                            break
+            except:
+                continue
+        
+        # Fallback if all attempts failed
         return [i+1 for i in range(min_len)]
 
 # ==========================================
@@ -99,7 +108,7 @@ class ProgramGenerator:
         # Recursive generation with strict length budgeting
         self.nodes_count = 0
         
-        def _gen(current_depth):
+        def _gen(current_depth, force_op=False):
             # If max depth reached or max len nearly reached, return terminal
             if current_depth >= max_depth or self.nodes_count >= max_len - 1:
                 self.nodes_count += 1
@@ -121,6 +130,10 @@ class ProgramGenerator:
                 weights = [0.3, 0.5, 0.2, 0.0]
             else:
                 weights = [0.8, 0.2, 0.0, 0.0]
+            
+            # Force at least one operation at root (avoid bare "A")
+            if force_op:
+                weights[0] = 0.0  # Disable arity 0 (terminal)
                 
             # Normalize weights for valid arities
             probs = [weights[i] if i in valid_arities else 0 for i in range(4)]
@@ -142,7 +155,9 @@ class ProgramGenerator:
                 op = "COND"
                 return Node(op, [], [_gen(current_depth+1), _gen(current_depth+1), _gen(current_depth+1)])
         
-        root = _gen(0)
+        # With 99.99% probability, force at least one operation
+        force_meaningful = (random.random() > 0.0001)
+        root = _gen(0, force_op=force_meaningful)
         return Program(root)
 
 
@@ -174,13 +189,15 @@ def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficu
                 
                 # 1. Gen A
                 if random.random() < 0.6:
-                    base = pool.get_random(min_len=15)
+                    # Extract from real OEIS data (min_len=7, no upper limit)
+                    base = pool.get_random(min_len=7)
                     if random.random() < 0.3: 
                         k = random.randint(1, 3); b = random.randint(-5, 5)
                         base = [x*k + b for x in base]
                     A_full = base
                 else:
-                    N = random.randint(15, 25)
+                    # Synthesize simple sequence (length 7-30)
+                    N = random.randint(7, 30)
                     kind = random.choice(["nat", "squares", "randwalk", "const"])
                     if kind=="nat": A_full = [i+1 for i in range(N)]
                     elif kind=="squares": A_full = [(i+1)**2 for i in range(N)]
@@ -191,7 +208,7 @@ def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficu
                             cur+=random.randint(-3,3); out.append(cur)
                         A_full = out
                 
-                if len(A_full) > 40: A_full = A_full[:40]
+                # No truncation - allow full length sequences
 
                 # 2. Gen Program
                 if random.random() < prob_long:
@@ -223,7 +240,9 @@ def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficu
                                 B_full[t] = int(round(val))
                         except: pass
                 
-                n_in = random.randint(5, min(12, len(A_full)-1))
+                # Determine train/validation split using unified rule
+                n_in, n_validate = compute_split(len(A_full))
+                
                 toks = P.to_tokens()
                 
                 # Store minimal info

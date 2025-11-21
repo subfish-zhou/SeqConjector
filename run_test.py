@@ -178,10 +178,14 @@ def main():
                 if not a_seq or not b_seq:
                     continue
                     
-                # Add tasks for both modes
+                # Add tasks for both modes with auto-computed split
+                from oeis.split_utils import compute_split
+                min_len = min(len(a_seq), len(b_seq))
+                n_in, n_chk = compute_split(min_len)
+                
                 for mode in modes:
                     # task: (A_seq, B_seq, A_id, B_id, mode, n_in, n_chk, timeout)
-                    tasks.append((a_seq, b_seq, a_id, b_id, mode, 8, 8, 1.0))
+                    tasks.append((a_seq, b_seq, a_id, b_id, mode, n_in, n_chk, 1.0))
 
     logger.info(f"Total tasks: {len(tasks)}")
 

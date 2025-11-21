@@ -6,6 +6,7 @@ from oeis.interpreter import Interpreter, ExecConfig
 from oeis.checker import check_program_on_pair, check_program_moonshine
 from oeis.beam_egd import egd_beam_search, longest_prefix_parse
 from oeis.torch_model import Cfg, TransDecoder, stoi, itos, TOKENS, cheap_features
+from oeis.split_utils import compute_split
 
 def try_templates_moonshine(A, B, n_in, n_chk, k_strict=3, tau0=2e-3, tau1=1e-3):
     """
@@ -88,6 +89,14 @@ class TorchAdapter:
 def cmd_eval(args):
     A = json.load(open(args.A)); B = json.load(open(args.B))
     toks = args.program.strip().split()
+    
+    # Auto-compute split if not provided
+    if args.n_in is None or args.n_chk is None:
+        min_len = min(len(A), len(B))
+        n_in, n_chk = compute_split(min_len)
+        if args.n_in is None: args.n_in = n_in
+        if args.n_chk is None: args.n_chk = n_chk
+    
     if args.moonshine:
         rep = check_program_moonshine(toks, A_full=A, B_full=B, n_in=args.n_in, n_chk=args.n_chk,
                                       k_strict=args.k_strict, tau0=args.relerr0, tau1=args.relerr_step)
@@ -102,6 +111,14 @@ def cmd_beam(args):
     # from oeis.torch_model import TorchAdapter, RandomAdapter
 
     A = json.load(open(args.A)); B = json.load(open(args.B))
+    
+    # Auto-compute split if not provided
+    if args.n_in is None or args.n_chk is None:
+        min_len = min(len(A), len(B))
+        n_in_auto, n_chk_auto = compute_split(min_len)
+        if args.n_in is None: args.n_in = n_in_auto
+        if args.n_chk is None: args.n_chk = n_chk_auto
+    
     n_in, n_chk = args.n_in, args.n_chk
     if n_in + n_chk > min(len(A), len(B)):
         print(f"[WARN] n_in+n_chk={n_in+n_chk} exceeds min length {min(len(A),len(B))}, shrinking n_chk")
@@ -170,8 +187,8 @@ if __name__ == "__main__":
     ap_eval.add_argument("--A", required=True)
     ap_eval.add_argument("--B", required=True)
     ap_eval.add_argument("--program", required=True)
-    ap_eval.add_argument("--n_in", type=int, default=8)
-    ap_eval.add_argument("--n_chk", type=int, default=8)
+    ap_eval.add_argument("--n_in", type=int, default=None, help="Auto-compute if not provided")
+    ap_eval.add_argument("--n_chk", type=int, default=None, help="Auto-compute if not provided")
     ap_eval.add_argument("--moonshine", action="store_true")
     ap_eval.add_argument("--k_strict", type=int, default=3)
     ap_eval.add_argument("--relerr0", type=float, default=2e-3)
@@ -181,8 +198,8 @@ if __name__ == "__main__":
     ap_beam = sub.add_parser("beam")
     ap_beam.add_argument("--A", required=True)
     ap_beam.add_argument("--B", required=True)
-    ap_beam.add_argument("--n_in", type=int, default=8)
-    ap_beam.add_argument("--n_chk", type=int, default=8)
+    ap_beam.add_argument("--n_in", type=int, default=None, help="Auto-compute if not provided")
+    ap_beam.add_argument("--n_chk", type=int, default=None, help="Auto-compute if not provided")
     ap_beam.add_argument("--beam", type=int, default=256)
     ap_beam.add_argument("--max_steps", type=int, default=96)
     ap_beam.add_argument("--ckpt", default="")
