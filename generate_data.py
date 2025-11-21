@@ -231,6 +231,14 @@ def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficu
                 if (not r.ok) or r.seq is None or len(r.seq) < 10:
                     continue
 
+                # Filter out large numbers to avoid serialization issues and keep data clean
+                # Limit to 100 digits (10^100)
+                try:
+                    if any(abs(x) > 10**100 for x in r.seq): 
+                        continue
+                except:
+                    continue
+
                 B_full = r.seq
                 
                 # 4. Moonshine
