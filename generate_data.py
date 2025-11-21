@@ -7,38 +7,41 @@ from oeis.torch_model import stoi, TOKENS, cheap_features
 # 1. Real Sequence Pool (Reusable)
 # ==========================================
 class RealSequencePool:
-    def __init__(self, data_dir="oeis_seq_labeled/formula_true", max_cache=10000):
+    def __init__(self, data_dir="oeis_seq_labeled/formula_true", max_cache=3000):
         self.files = glob.glob(os.path.join(data_dir, "*.jsonl"))
         self.cache = []
         self.max_cache = max_cache
         if len(self.files) > 0:
-            print(f"[Gen] Found {len(self.files)} source files in {data_dir}")
             self._fill_cache()
-        else:
-            print(f"[Gen] Warning: no source files found in {data_dir}")
 
     def _fill_cache(self):
-        # Load a random subset of real sequences
+        # Load a random subset of real sequences (OPTIMIZED)
+        # Reduced from 10000 to 3000 per worker to speed up initialization
         attempts = 0
-        while len(self.cache) < self.max_cache and attempts < 100:
+        while len(self.cache) < self.max_cache and attempts < 50:
             attempts += 1
             fpath = random.choice(self.files)
             try:
                 with open(fpath, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                    # Sample up to 200 lines per file to spread diversity
-                    sample_lines = random.sample(lines, min(len(lines), 200))
-                    for line in sample_lines:
+                    # Stream and sample instead of loading all
+                    sampled = []
+                    for i, line in enumerate(f):
+                        if random.random() < 0.05:  # 5% sampling rate
+                            sampled.append(line)
+                        if len(sampled) >= 100:
+                            break
+                    
+                    for line in sampled:
                         try:
                             entry = json.loads(line)
                             seq = entry.get("seq", [])
-                            # Only keep reasonably long integer sequences
-                            if len(seq) > 10 and all(isinstance(x, int) for x in seq):
-                                self.cache.append(seq)
+                            # Filter: reasonable length + no huge values
+                            if (len(seq) > 10 and len(seq) < 200 and 
+                                all(isinstance(x, int) and abs(x) < 1e12 for x in seq)):
+                                self.cache.append(seq[:50])  # Truncate
                         except: continue
             except: continue
             if len(self.cache) >= self.max_cache: break
-        print(f"[Gen] Loaded {len(self.cache)} real sequences into cache.")
 
     def get_random(self, min_len=15):
         if not self.cache: return [i+1 for i in range(30)]
@@ -63,12 +66,12 @@ class ProgramGenerator:
         # 1-arity (Unary)
         self.unary_arith = ["SCALE", "OFFSET", "MAP_ABS", "MAP_SGN", "MAP_MOD", "MAP_DIV", "MAP_SQRT"]
         self.unary_scan = ["SCAN_ADD", "SCAN_MUL", "DIFF_FWD", "DIFF_BACK"]
-        self.unary_trans = ["BINOM", "IBINOM", "EULER", "CONV", "POLY"]
+        self.unary_trans = ["CONV_FWD", "CONV_BACK", "POLY"]  # Removed BINOM, IBINOM, EULER (too slow)
         self.unary_idx = ["SHIFT", "REIDX", "SUBSAMPLE", "REPEAT", "DROP", "DROP_AT_2", "INSERT1", "INSERT2"]
-        self.unary_nt = ["MAP_TAU", "MAP_SIGMA", "MAP_PHI", "MAP_MU", "MAP_OMEGA", "MAP_BIGOMEGA"]
+        # Removed all number theory functions (MAP_TAU, MAP_SIGMA, etc.) - too slow on large integers
         self.unary_pred = ["PRED_POS", "PRED_NEG", "PRED_IS_EVEN_N", "PRED_EQ_CONST", "PRED_GT_CONST", "PRED_LT_CONST", "PRED_NOT"]
         
-        self.unary_ops = self.unary_arith + self.unary_scan + self.unary_trans + self.unary_idx + self.unary_nt + self.unary_pred
+        self.unary_ops = self.unary_arith + self.unary_scan + self.unary_trans + self.unary_idx + self.unary_pred
 
         # 2-arity (Binary)
         self.binary_ops = ["SEQ_ADD", "SEQ_SUB", "SEQ_MUL", "SEQ_DIV", "PRED_AND", "PRED_OR"]
@@ -80,16 +83,13 @@ class ProgramGenerator:
         # Helper to generate arguments for ops that require them
         if op in ["SCALE", "OFFSET"]: return [random.choice([-2,-1,2,3,4,5,10])]
         if op in ["MAP_MOD", "MAP_DIV"]: return [random.choice([2,3,4,5,10])]
-        if op == "DIFF_FWD" or op == "DIFF_BACK": return [random.choice([1,1,1,2,3])]
+        if op in ["DIFF_FWD", "DIFF_BACK", "CONV_FWD", "CONV_BACK"]: return [random.choice([1,1,1,2,3])]
         if op == "SHIFT": return [random.randint(1, 4)]
         if op == "SUBSAMPLE": return [random.randint(2, 4)]
         if op == "REPEAT": return [random.randint(2, 3)]
         if op == "DROP": return [random.randint(1, 5)]
         if op == "INSERT1" or op == "INSERT2": return [random.randint(-5, 5)]
         if op == "REIDX": return [random.choice([2,3]), random.choice([0,1])] # k, b
-        if op == "CONV": 
-            L = random.randint(1, 3)
-            return [L] + [random.randint(-3, 3) for _ in range(L)]
         if op == "POLY":
             return [random.randint(-2,2) for _ in range(3)] # a,b,c
         if "CONST" in op: return [random.randint(0, 5)]
@@ -166,7 +166,7 @@ def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficu
         
         # Increase attempt limit significantly to avoid early exit on hard difficulties
         attempts = 0
-        max_attempts = num_samples * 100 
+        max_attempts = num_samples * 50  # Reduce from 100 to avoid extreme cases 
         
         with open(out_file, 'w', encoding='utf-8') as f:
             while generated_count < num_samples and attempts < max_attempts:
@@ -236,15 +236,17 @@ def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficu
                 buffer.append(json.dumps(item))
                 generated_count += 1
                 
-                # Flush buffer every 50 items
-                if len(buffer) >= 50:
+                # Flush buffer every 200 items (reduce I/O and queue overhead)
+                if len(buffer) >= 200:
                     f.write("\n".join(buffer) + "\n")
+                    f.flush()  # Ensure data is written
                     queue.put(len(buffer))
                     buffer = []
 
             # Flush remaining
             if buffer:
                 f.write("\n".join(buffer) + "\n")
+                f.flush()
                 queue.put(len(buffer))
         
         return generated_count
@@ -289,22 +291,30 @@ def main():
         # Use map_async so we can monitor queue while workers run
         result_async = p.starmap_async(worker_generate, pool_args)
         
-        # Monitor queue
-        with tqdm.tqdm(total=args.total_samples, unit="sample") as pbar:
+        # Monitor queue with reduced update frequency
+        with tqdm.tqdm(total=args.total_samples, unit="sample", miniters=100, mininterval=0.5) as pbar:
+            accumulated = 0
             while not result_async.ready():
                 # Read from queue
                 try:
-                    # Drain queue
+                    # Drain queue and batch update
+                    batch_count = 0
                     while not queue.empty():
                         n = queue.get_nowait()
-                        pbar.update(n)
+                        batch_count += n
+                    if batch_count > 0:
+                        pbar.update(batch_count)
+                        accumulated += batch_count
                 except: pass
-                time.sleep(0.1)
+                time.sleep(0.5)  # Check less frequently
             
             # Final drain
+            batch_count = 0
             while not queue.empty():
                 n = queue.get_nowait()
-                pbar.update(n)
+                batch_count += n
+            if batch_count > 0:
+                pbar.update(batch_count)
                 
         # Get final results (to propagate exceptions if any)
         results = result_async.get()

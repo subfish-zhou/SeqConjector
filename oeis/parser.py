@@ -9,12 +9,19 @@ OPS_SIG = {
     "MAP_ABS": (0,1),
     "MAP_SGN": (0,1),
     "MAP_MOD": (1,1),
-    "MAP_TAU": (0,1),
-    "MAP_SIGMA": (0,1),
-    "MAP_PHI": (0,1),
-    "MAP_MU": (0,1),
-    "MAP_OMEGA": (0,1),
-    "MAP_BIGOMEGA": (0,1),
+    "MAP_DIV": (1,1),
+    "MAP_SQRT": (0,1),
+    # Number theory functions removed - too slow
+    # "MAP_TAU": (0,1),
+    # "MAP_SIGMA": (0,1),
+    # "MAP_PHI": (0,1),
+    # "MAP_MU": (0,1),
+    # "MAP_OMEGA": (0,1),
+    # "MAP_BIGOMEGA": (0,1),
+    "SEQ_ADD": (0,2),
+    "SEQ_SUB": (0,2),
+    "SEQ_MUL": (0,2),
+    "SEQ_DIV": (0,2),
     "SCAN_ADD": (0,1),
     "SCAN_MUL": (0,1),
     "DIFF_FWD": (1,1),
@@ -22,12 +29,14 @@ OPS_SIG = {
     "CONV_FWD": (1,1),
     "CONV_BACK": (1,1),
     "POLY": (3,1),
+    # Binomial and Euler transforms removed - too slow
+    # "BINOM": (0,1),
+    # "IBINOM": (0,1),
+    # "EULER": (0,1),
+    "SHIFT": (1,1),
     "REIDX": (2,1),
     "SUBSAMPLE": (1,1),
     "REPEAT": (1,1),
-    "BINOM": (0,1),
-    "IBINOM": (0,1),
-    "EULER": (0,1),
     "DROP": (1,1),
     "DROP_AT_2": (0,1),
     "INSERT1": (1,1),
@@ -42,13 +51,6 @@ OPS_SIG = {
     "PRED_AND": (0,2),
     "PRED_OR": (0,2),
     "COND": (0,3),
-    "MAP_DIV": (1,1),
-    "MAP_SQRT": (0,1),
-    "SEQ_ADD": (0,2),
-    "SEQ_SUB": (0,2),
-    "SEQ_MUL": (0,2),
-    "SEQ_DIV": (0,2),
-    "SHIFT": (1,1),
 }
 
 BINOPS = {"ADD","SUB","MUL","MIN","MAX"}
@@ -68,9 +70,13 @@ def parse_prefix(tokens: List[str]) -> Program:
         if op not in OPS_SIG: raise ParseError(f"Unknown op {op}")
         args_arity, kids_arity = OPS_SIG[op]
         args = []
-        for _ in range(args_arity):
-            try: args.append(int(need()))
-            except: raise ParseError(f"{op} arg must be int")
+        
+        # Standard args parsing
+        if args_arity is not None:
+            for _ in range(args_arity):
+                try: args.append(int(need()))
+                except: raise ParseError(f"{op} arg must be int")
+        
         kids = []
         for _ in range(kids_arity):
             child, _ = parse_node()
