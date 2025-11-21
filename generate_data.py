@@ -265,19 +265,36 @@ def main():
     pool_args = []
     for i in range(args.workers):
         out_file = os.path.join(args.out_dir, f"{args.prefix}_part_{i:03d}.jsonl")
-        # worker_id, num_samples, seed, out_file, moonshine_prob, difficulty
         pool_args.append((i, samples_per_worker, args.seed, out_file, args.moonshine_prob, args.difficulty))
         
     print(f"Generating {args.total_samples} samples with {args.workers} workers...")
     print(f"Difficulty level: {args.difficulty}")
     
     t0 = time.time()
+    # Use imap_unordered to get results as they complete for progress bar
+    # Note: worker_generate currently returns only total count after finishing.
+    # To have a real-time progress bar, workers need to yield progress or we just track completed workers.
+    # Since each worker does a large chunk, tracking completed workers is coarse but simple.
+    
+    import tqdm
+    completed = 0
+    total_gen = 0
+    
     with multiprocessing.Pool(args.workers) as p:
-        results = p.starmap(worker_generate, pool_args)
+        # We use a simple approach: just wait for workers to finish
+        # Ideally we would use a Queue to report progress, but that requires more refactoring.
+        # Given the request, let's just show a progress bar of *finished workers*.
         
-    total = sum(results)
+        # Better: Wrap the starmap
+        results = []
+        with tqdm.tqdm(total=args.workers, desc="Workers") as pbar:
+            for res in p.starmap(worker_generate, pool_args):
+                results.append(res)
+                total_gen += res
+                pbar.update(1)
+        
     dt = time.time() - t0
-    print(f"Done. Generated {total} samples in {dt:.2f}s. Saved to {args.out_dir}")
+    print(f"Done. Generated {total_gen} samples in {dt:.2f}s. Saved to {args.out_dir}")
 
 if __name__ == "__main__":
     main()
