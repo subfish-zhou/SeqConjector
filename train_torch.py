@@ -4,7 +4,7 @@ from torch.amp import GradScaler
 from oeis.program import Node, Program
 from oeis.interpreter import Interpreter, ExecConfig
 from oeis.parser import parse_prefix
-from oeis.torch_model import Cfg, TransDecoder, stoi, TOKENS, cheap_features
+from oeis.torch_model import Cfg, TransDecoder, stoi, TOKENS, enhanced_features
 
 # ==========================================
 # 1. Pre-generated Dataset
@@ -52,7 +52,7 @@ class PreGeneratedDataset(IterableDataset):
         toks = item["toks"]
         is_moon = item["is_moon"]
         
-        feat = cheap_features(A, B)
+        feat = enhanced_features(A, B)
         ctx = [stoi["<BOS>"]]
         x_toks = []; y_toks = []
         for t in toks + ["<EOS>"]:

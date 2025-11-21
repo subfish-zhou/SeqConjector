@@ -11,13 +11,6 @@ OPS_SIG = {
     "MAP_MOD": (1,1),
     "MAP_DIV": (1,1),
     "MAP_SQRT": (0,1),
-    # Number theory functions removed - too slow
-    # "MAP_TAU": (0,1),
-    # "MAP_SIGMA": (0,1),
-    # "MAP_PHI": (0,1),
-    # "MAP_MU": (0,1),
-    # "MAP_OMEGA": (0,1),
-    # "MAP_BIGOMEGA": (0,1),
     "SEQ_ADD": (0,2),
     "SEQ_SUB": (0,2),
     "SEQ_MUL": (0,2),
@@ -29,10 +22,6 @@ OPS_SIG = {
     "CONV_FWD": (1,1),
     "CONV_BACK": (1,1),
     "POLY": (3,1),
-    # Binomial and Euler transforms removed - too slow
-    # "BINOM": (0,1),
-    # "IBINOM": (0,1),
-    # "EULER": (0,1),
     "SHIFT": (1,1),
     "REIDX": (2,1),
     "SUBSAMPLE": (1,1),
@@ -52,8 +41,6 @@ OPS_SIG = {
     "PRED_OR": (0,2),
     "COND": (0,3),
 }
-
-BINOPS = {"ADD","SUB","MUL","MIN","MAX"}
 
 class ParseError(Exception): pass
 

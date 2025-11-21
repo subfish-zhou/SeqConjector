@@ -14,7 +14,6 @@ class GrammarState:
     def push(self, op:str):
         args,kids = OPS_SIG[op]
         fr={"op":op,"need_args":args,"kids":kids,"mode":None}
-        if op=="ZIP": fr["need_args"]=3; fr["mode"]="ZIP_HEAD"
         if op=="CONV": fr["need_args"]=1; fr["mode"]="CONV_LEN"
         if op=="MAP_DIV": fr["need_args"]=1; fr["mode"]="MAP_DIV_ARG"
         self.stack.append(fr); self.expect_op=(fr["need_args"]==0 and fr["kids"]>0)
@@ -26,11 +25,6 @@ class GrammarState:
             if not self.stack: return False
             fr=self.stack[-1]
             if fr["need_args"]<=0: return False
-            if fr["op"]=="ZIP" and fr["mode"]=="ZIP_HEAD" and fr["need_args"]==3:
-                if tok not in ("ADD","SUB","MUL","MIN","MAX"): return False
-                fr["need_args"]-=1; self.expect_op=False
-                if fr["need_args"]==0 and fr["kids"]>0: self.expect_op=True
-                return True
             try: v=int(tok)
             except: return False
             if fr["op"]=="CONV" and fr["mode"]=="CONV_LEN":
@@ -60,10 +54,7 @@ class GrammarState:
         """
         语法感知的候选集生成：
         - 期待 op 时：仅返回 DSL 操作符；
-        - 期待 ZIP 的第一个参数（binop）：仅 {ADD,SUB,MUL,MIN,MAX}；
-        - 期待 ZIP 的延迟参数：仅 {0..16} 非负整数；
         - 期待 CONV 的长度：仅 {1..5}；
-        - 期待 POLY 的次数：仅 {0..4}；
         - 其他需要整数的地方：默认 {-16..16}。
         """
         if self.expect_op:
@@ -74,13 +65,6 @@ class GrammarState:
             return []
 
         fr = self.stack[-1]
-
-        # ZIP: 第一个参数是 binop；之后两个是 delay
-        if fr["op"] == "ZIP":
-            if fr.get("mode") == "ZIP_HEAD" and fr["need_args"] == 3:
-                return ["ADD", "SUB", "MUL", "MIN", "MAX"]
-            # 现在在喂延迟 k1/k2
-            return [str(i) for i in range(0, 17)]  # 0..16
 
         # CONV: 长度
         if fr["op"] == "CONV" and fr.get("mode") == "CONV_LEN" and fr["need_args"] == 1:
@@ -111,7 +95,7 @@ def egd_beam_search(model, A_vis, B_vis, beam=256, max_steps=96,
                     time_limit=10.0):
     """
     改动要点：
-    1) 严格/宽松双执行器：宽松用于估计误差，严格用于提前剪掉“越界/未定义”的候选（如 ZIP 负延迟）。
+    1) 严格/宽松双执行器：宽松用于估计误差，严格用于提前剪掉"越界/未定义"的候选。
     2) 记录 best_by_err（rmse 最小的可解析前缀），作为最终兜底，避免回退到 `A`。
     """
     import time, math, numpy as np

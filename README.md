@@ -178,23 +178,16 @@ python train_torch.py \
 常量：`-16..16`（词表，训练采样常量受限；运行时模板可读任意 `B[1]/B[2]`）
 
 **一元/扫描**
-`SCALE c`, `OFFSET c`, `MAP_ABS`, `MAP_SGN`, `MAP_MOD m`,
-`MAP_TAU/MAP_SIGMA/MAP_PHI/MAP_MU/MAP_OMEGA/MAP_BIGOMEGA`,
+`SCALE c`, `OFFSET c`, `MAP_ABS`, `MAP_SGN`, `MAP_MOD m`, `MAP_DIV c`, `MAP_SQRT`,
 `SCAN_ADD`, `SCAN_MUL`,
-`DIFF_FWD k`（宽松时尾部填 0 / 严格报未定义）, `DIFF_BACK k`
+`DIFF_FWD k`, `DIFF_BACK k`, `CONV_FWD k`, `CONV_BACK k`
 
 **二元/多元**
-`ZIP op k1 k2`（`op∈{ADD,SUB,MUL,MIN,MAX}`；延迟非负、越界在严格模式报错）
-`CONV L w1 ... wL`（L≤5）
-`POLY D c0 ... cD`（D≤4，线性组合模板）
+`SEQ_ADD`, `SEQ_SUB`, `SEQ_MUL`, `SEQ_DIV`（二元序列运算）
+`POLY a b c`（多项式：a*x² + b*x + c）
 
 **索引/变换**
-`REIDX k b`（检查全域索引合法）
-`SUBSAMPLE k`（k>0）、`REPEAT k`（k>0）
-
-**标准变换**
-`BINOM` / `IBINOM`（二项式/逆二项式变换，行缓存）
-`EULER`（欧拉变换，缓存 + 严格时保证整除，否则报错）
+`SHIFT k`, `REIDX k b`, `SUBSAMPLE k`, `REPEAT k`, `DROP k`, `DROP_AT_2`
 
 **插项/删除原语**
 `INSERT1 c`、`INSERT2 c`：仅在第 1/2 位插入常数 `c`，其他右移并丢弃末项，**长度不变**。
@@ -228,7 +221,7 @@ python train_torch.py \
 ## EGD 束搜（关键点）
 
 * **程序必须包含 A**：在评估候选程序时，自动过滤不包含 A 的程序
-* **语法约束**：token 只从允许集合扩展（例如 `ZIP` 的两个延迟限制在 `0..16`）
+* **语法约束**：token 只从允许集合扩展（整数常量限制在 `-16..16`）
 * **前缀执行**：宽松执行用于估误差；**严格执行用于早剪枝**（越界/未定义直接丢）
 * **误差函数**：前 `k_strict` 必须刚好对上；尾部用 log 相对误差的 RMSE
 * **兜底策略**：若没有"合格"候选，返回 **误差最小** 的可解析前缀，而非退回 `A`

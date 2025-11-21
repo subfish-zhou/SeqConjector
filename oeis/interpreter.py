@@ -29,64 +29,6 @@ class Budget:
         if self.used > self.allowed:
             raise RuntimeError("budget_exceeded")
 
-def tau(n:int)->int:
-    if n==0: return 0
-    x=abs(n); c=1; p=2
-    while p*p<=x:
-        e=0
-        while x%p==0: x//=p; e+=1
-        if e>0: c*=e+1
-        p+=1
-    if x>1: c*=2
-    return c
-
-def phi(n:int)->int:
-    if n==0: return 0
-    x=abs(n); r=x; p=2
-    while p*p<=x:
-        if x%p==0:
-            while x%p==0: x//=p
-            r-=r//p
-        p+=1
-    if x>1: r-=r//x
-    return r if n>=0 else -r
-
-def sigma(n:int)->int:
-    if n==0: return 0
-    s=0; i=1; x=abs(n)
-    while i*i<=x:
-        if x%i==0:
-            j=x//i; s+=i; 
-            if j!=i: s+=j
-        i+=1
-    return s
-
-def mu(n:int)->int:
-    if n==0: return 0
-    x=abs(n); m=1; p=2
-    while p*p<=x:
-        if x%p==0:
-            x//=p
-            if x%p==0: return 0
-            m=-m
-        p+=1
-    if x>1: m=-m
-    return m
-
-def omega(n:int, big=False)->int:
-    if n==0: return 0
-    x=abs(n); c=0; p=2
-    while p*p<=x:
-        if x%p==0:
-            c+=1
-            if big:
-                while x%p==0: x//=p; c+=1
-            else:
-                while x%p==0: x//=p
-        p+=1
-    if x>1: c+=1
-    return c
-
 class Interpreter:
     def __init__(self, cfg: ExecConfig=ExecConfig()):
         self.cfg=cfg
@@ -141,14 +83,6 @@ class Interpreter:
                     return 0
                 return math.isqrt(n)
             return [budget.add_for(i) or (budget.charge(5) or 0, isqrt_safe(X[i]))[1] for i in range(len(X))]
-            
-        # Number theory functions removed - too slow on large integers from OEIS data
-        # if op=="MAP_TAU":   X=get_X(); return [budget.add_for(i) or (budget.charge(50) or 0, tau(X[i]))[1] for i in range(len(X))]
-        # if op=="MAP_SIGMA": X=get_X(); return [budget.add_for(i) or (budget.charge(80) or 0, sigma(X[i]))[1] for i in range(len(X))]
-        # if op=="MAP_PHI":   X=get_X(); return [budget.add_for(i) or (budget.charge(50) or 0, phi(X[i]))[1] for i in range(len(X))]
-        # if op=="MAP_MU":    X=get_X(); return [budget.add_for(i) or (budget.charge(50) or 0, mu(X[i]))[1] for i in range(len(X))]
-        # if op=="MAP_OMEGA": X=get_X(); return [budget.add_for(i) or (budget.charge(50) or 0, omega(X[i], False))[1] for i in range(len(X))]
-        # if op=="MAP_BIGOMEGA": X=get_X(); return [budget.add_for(i) or (budget.charge(50) or 0, omega(X[i], True))[1] for i in range(len(X))]
         
         if op=="SEQ_ADD":
             L=self._eval(node.kids[0], A, budget); R=self._eval(node.kids[1], A, budget)
@@ -226,51 +160,6 @@ class Interpreter:
         if op=="POLY":
             X=get_X(); a,b,c = node.args
             return [budget.add_for(i) or (budget.charge(3) or 0, a*X[i]*X[i] + b*X[i] + c)[1] for i in range(len(X))]
-        # Binomial and Euler transforms removed - O(n^2) complexity too slow
-        # if op=="BINOM":
-        #     X=get_X(); N=len(X); B=[0]*N
-        #     row=[0]*(N+1); row[0]=1
-        #     B[0]=row[0]*X[0]
-        #     for n in range(1,N):
-        #         for k in range(n,0,-1):
-        #             row[k]+=row[k-1]
-        #         s=0
-        #         for k in range(n+1):
-        #             budget.add_for(n); budget.charge(2); s+=row[k]*X[k]
-        #         B[n]=s
-        #     return B
-        # if op=="IBINOM":
-        #     X=get_X(); N=len(X); B=[0]*N
-        #     row=[0]*(N+1); row[0]=1
-        #     B[0]=row[0]*X[0]
-        #     for n in range(1,N):
-        #         for k in range(n,0,-1):
-        #             row[k]+=row[k-1]
-        #         s=0
-        #         for k in range(n+1):
-        #             budget.add_for(n); budget.charge(2)
-        #             s += ((1 if (n-k)%2==0 else -1) * row[k] * X[k])
-        #         B[n]=s
-        #     return B
-        # if op=="EULER":
-        #     X=get_X(); N=len(X); 
-        #     if N==0: return []
-        #     B=[0]*N; B[0]=1; c=[0]*N
-        #     for d in range(1,N):
-        #         if X[d]==0: continue
-        #         mul = d*X[d]
-        #         for m in range(d, N, d):
-        #             budget.add_for(m); budget.charge(2)
-        #             c[m]+=mul
-        #     for n in range(1,N):
-        #         s=0
-        #         for k in range(1,n+1):
-        #             budget.add_for(n); budget.charge(2)
-        #             s += c[k]*B[n-k]
-        #         if s % n != 0 and self.cfg.strict:
-        #             raise RuntimeError("euler_non_integer")
-        #         B[n] = s//n
-        #     return B
 
         if op=="SHIFT":
             X=get_X(); k=node.args[0]
