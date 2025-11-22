@@ -1,83 +1,97 @@
 #!/bin/bash
 
 # =============================================================================
-# 序列关系批量实验脚本
+# Sequence Relation Batch Experiment Script
 # =============================================================================
 
-# =============================================================================
-# 配置参数（可修改）
-# =============================================================================
+# Auto-detect system resources
+echo "=========================================="
+echo "Detecting system resources..."
+echo "=========================================="
 
-# 输入文件路径（相对于项目根目录）
-A_FILE="oeis_seq_labeled/formula_false/algebraic_number_theory.jsonl"
-B_FILE="oeis_seq_labeled/formula_false/graph_theory.jsonl"
+# Detect CPU cores
+CPU_CORES=$(nproc 2>/dev/null || echo "4")
+echo "CPU cores: $CPU_CORES"
 
-# 选取数量（留空或设为0表示全部加载）
-A_COUNT=""  # 留空 = 全部，或设置如 100
-B_COUNT=""  # 留空 = 全部，或设置如 100
+# Detect available memory (in MB)
+TOTAL_MEM=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')
+if [ -z "$TOTAL_MEM" ]; then
+    TOTAL_MEM=8000  # Default fallback: 8GB
+fi
+echo "Total memory: ${TOTAL_MEM}MB"
 
-# 输出目录
+# Calculate optimal workers
+# Each worker needs ~500MB (model 123MB + Python 200MB + buffer 177MB)
+WORKER_MEM=500
+# Leave 20% memory for system
+AVAILABLE_MEM=$((TOTAL_MEM * 80 / 100))
+MAX_WORKERS_BY_MEM=$((AVAILABLE_MEM / WORKER_MEM))
+MAX_WORKERS_BY_CPU=$CPU_CORES
+
+# Take the minimum to avoid over-subscription
+if [ $MAX_WORKERS_BY_MEM -lt $MAX_WORKERS_BY_CPU ]; then
+    AUTO_WORKERS=$MAX_WORKERS_BY_MEM
+    LIMIT_REASON="memory"
+else
+    AUTO_WORKERS=$MAX_WORKERS_BY_CPU
+    LIMIT_REASON="CPU cores"
+fi
+
+# Ensure at least 1 worker, cap at 128
+AUTO_WORKERS=$((AUTO_WORKERS < 1 ? 1 : AUTO_WORKERS))
+AUTO_WORKERS=$((AUTO_WORKERS > 128 ? 128 : AUTO_WORKERS))
+
+echo "Available memory for workers: ${AVAILABLE_MEM}MB"
+echo "Max workers by memory: $MAX_WORKERS_BY_MEM"
+echo "Max workers by CPU: $MAX_WORKERS_BY_CPU"
+echo "==> Selected workers: $AUTO_WORKERS (limited by $LIMIT_REASON)"
+echo ""
+
+# Configuration Parameters
+A_FILE="oeis_seq_labeled/modular_forms.jsonl"
+B_FILE="oeis_seq_labeled/graph_theory.jsonl"
+A_COUNT=""  # Empty = all, or set number like 100
+B_COUNT=""  # Empty = all, or set number like 100
 OUTPUT_DIR="experiment_results"
 
-# 实验配置
-BEAM_WIDTH=16          # Beam搜索宽度
-TIME_LIMIT=20.0        # 单个任务超时时间(秒)
-MAX_STEPS=96           # 最大搜索步数
-PARALLEL_WORKERS=1     # 并行worker数量（CPU）
-USE_GPU=0              # 是否使用GPU (0=否, 1=是)
+# Experiment Settings (optimized for trained model capacity)
+BEAM_WIDTH=16
+TIME_LIMIT=5.0
+MAX_STEPS=8
+PARALLEL_WORKERS=$AUTO_WORKERS  # Auto-detected
+USE_GPU=0  # CPU parallel mode
 
-# =============================================================================
-# 脚本开始（一般不需要修改下面的内容）
-# =============================================================================
-
-echo "================================================================================"
-echo "序列关系批量实验"
-echo "================================================================================"
-echo ""
-echo "配置信息:"
-echo "  A文件: $A_FILE"
-echo "  B文件: $B_FILE"
-echo "  A数量: ${A_COUNT:-全部}"
-echo "  B数量: ${B_COUNT:-全部}"
-echo "  输出目录: $OUTPUT_DIR"
-echo "  Beam宽度: $BEAM_WIDTH"
-echo "  超时: ${TIME_LIMIT}s"
-echo "  并行数: $PARALLEL_WORKERS"
-echo "  GPU: $([ $USE_GPU -eq 1 ] && echo '是' || echo '否')"
-echo ""
-
-# 检查文件是否存在
+# Check input files
 if [ ! -f "$A_FILE" ]; then
-    echo "错误: A文件不存在: $A_FILE"
+    echo "ERROR: File not found: $A_FILE"
     exit 1
 fi
 
 if [ ! -f "$B_FILE" ]; then
-    echo "错误: B文件不存在: $B_FILE"
+    echo "ERROR: File not found: $B_FILE"
     exit 1
 fi
 
-# 创建输出目录
+# Create output directory
 mkdir -p "$OUTPUT_DIR"
 
-# 生成输出文件名（基于输入文件名和时间戳）
+# Generate output filenames
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 A_NAME=$(basename "$A_FILE" .jsonl)
 B_NAME=$(basename "$B_FILE" .jsonl)
 OUTPUT_FILE="$OUTPUT_DIR/${A_NAME}_to_${B_NAME}_${TIMESTAMP}.jsonl"
 STATS_FILE="$OUTPUT_DIR/${A_NAME}_to_${B_NAME}_${TIMESTAMP}_stats.txt"
 
-# 构建命令
+# Build command
 CMD="python experiment_batch.py"
 CMD="$CMD --A-file \"$A_FILE\""
 CMD="$CMD --B-file \"$B_FILE\""
 CMD="$CMD --output \"$OUTPUT_FILE\""
-CMD="$CMD --beam-width $BEAM_WIDTH"
+CMD="$CMD --beam $BEAM_WIDTH"
 CMD="$CMD --time-limit $TIME_LIMIT"
 CMD="$CMD --max-steps $MAX_STEPS"
-CMD="$CMD --parallel-workers $PARALLEL_WORKERS"
+CMD="$CMD --workers $PARALLEL_WORKERS"
 
-# 添加可选参数
 if [ -n "$A_COUNT" ] && [ "$A_COUNT" -gt 0 ] 2>/dev/null; then
     CMD="$CMD --A-count $A_COUNT"
 fi
@@ -92,46 +106,21 @@ else
     CMD="$CMD --device cpu"
 fi
 
-# 显示完整命令
-echo "================================================================================"
-echo "执行命令:"
-echo "$CMD"
-echo "================================================================================"
-echo ""
-
-# 确认执行
-read -p "按回车键开始实验，或按Ctrl+C取消... " DUMMY
-
-# 执行实验
+# Run experiment
+echo "Running: $CMD"
 eval $CMD
 
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then
-    echo ""
-    echo "================================================================================"
-    echo "实验完成！"
-    echo "================================================================================"
-    echo "  结果文件: $OUTPUT_FILE"
-    echo "  统计文件: $STATS_FILE"
-    echo ""
-    
-    # 显示简要统计
+    echo "Experiment completed successfully"
+    echo "Output: $OUTPUT_FILE"
     if [ -f "$OUTPUT_FILE" ]; then
         TOTAL=$(wc -l < "$OUTPUT_FILE")
-        echo "  成功案例: $TOTAL 个"
-    fi
-    
-    if [ -f "$STATS_FILE" ]; then
-        echo ""
-        echo "统计摘要:"
-        head -20 "$STATS_FILE"
+        echo "Total results: $TOTAL"
     fi
 else
-    echo ""
-    echo "================================================================================"
-    echo "实验失败，退出码: $EXIT_CODE"
-    echo "================================================================================"
+    echo "Experiment failed with exit code: $EXIT_CODE"
     exit $EXIT_CODE
 fi
 

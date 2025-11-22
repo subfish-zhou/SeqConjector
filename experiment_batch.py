@@ -409,7 +409,8 @@ def run_batch_experiment(A_sequences: List[Dict],
                         relerr0: float = 2e-3,
                         relerr_step: float = 1e-3,
                         relerr_hi: float = 0.10,
-                        device: str = "cpu"):
+                        device: str = "cpu",
+                        progress_interval: int = 5000):
     """
     批量运行实验
     
@@ -427,16 +428,21 @@ def run_batch_experiment(A_sequences: List[Dict],
         relerr_step: moonshine误差步长
         relerr_hi: beam search误差上限
         device: 计算设备
+        progress_interval: 进度报告间隔（任务数）
     """
     
-    logger.info(f"开始批量实验")
-    logger.info(f"A数列数量: {len(A_sequences)}")
-    logger.info(f"B数列数量: {len(B_sequences)}")
-    logger.info(f"总任务数: {len(A_sequences) * len(B_sequences)}")
-    logger.info(f"并行worker数: {num_workers}")
-    logger.info(f"Beam宽度: {beam_width}")
-    logger.info(f"超时时间: {time_limit}秒")
-    logger.info(f"计算设备: {device}")
+    total_tasks = len(A_sequences) * len(B_sequences)
+    
+    logger.info(f"========== Batch Experiment Started ==========")
+    logger.info(f"A sequences: {len(A_sequences)}")
+    logger.info(f"B sequences: {len(B_sequences)}")
+    logger.info(f"Total tasks: {total_tasks}")
+    logger.info(f"Parallel workers: {num_workers}")
+    logger.info(f"Beam width: {beam_width}")
+    logger.info(f"Timeout: {time_limit}s")
+    logger.info(f"Device: {device}")
+    logger.info(f"Progress report every: {progress_interval} tasks")
+    logger.info(f"==============================================")
     
     # 准备任务列表
     tasks = []
@@ -458,30 +464,75 @@ def run_batch_experiment(A_sequences: List[Dict],
     
     # 运行实验
     results = []
+    success_count = 0
+    start_time = time.time()
+    last_report_time = start_time
     
-    if num_workers <= 1:
-        # 单线程模式（便于调试）
-        logger.info("使用单线程模式")
-        for task in tqdm(tasks, desc="处理任务"):
+    if num_workers <= 1 or device == "cuda":
+        # GPU模式或单线程：使用串行处理避免GPU竞争
+        if device == "cuda":
+            logger.info(f"GPU mode: using sequential processing with {num_workers} as batch hint")
+        else:
+            logger.info("CPU single-threaded mode")
+        
+        for idx, task in enumerate(tasks, 1):
             result = worker_wrapper(task)
             results.append(result)
             
-            # 只保存成功的结果
             if result.success:
+                success_count += 1
                 with open(output_file, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(asdict(result), ensure_ascii=False) + '\n')
+            
+            # Progress report
+            if idx % progress_interval == 0 or idx == total_tasks:
+                elapsed = time.time() - start_time
+                interval_time = time.time() - last_report_time
+                speed = progress_interval / interval_time if idx % progress_interval == 0 else idx / elapsed
+                eta = (total_tasks - idx) / speed if speed > 0 else 0
+                success_rate = success_count / idx * 100
+                
+                print(f"\n{'='*70}")
+                print(f"Progress Report: {idx}/{total_tasks} tasks ({idx/total_tasks*100:.1f}%)")
+                print(f"  Success: {success_count} ({success_rate:.1f}%)")
+                print(f"  Failed: {idx - success_count}")
+                print(f"  Speed: {speed:.1f} tasks/sec")
+                print(f"  Elapsed: {elapsed:.0f}s | ETA: {eta:.0f}s")
+                print(f"{'='*70}\n")
+                
+                last_report_time = time.time()
     else:
-        # 多进程并行模式
-        logger.info(f"使用{num_workers}个worker并行处理")
+        # CPU多进程并行模式
+        logger.info(f"CPU parallel mode: {num_workers} workers")
+        
+        completed = 0
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            for result in tqdm(executor.map(worker_wrapper, tasks), 
-                             total=len(tasks), desc="处理任务"):
+            for result in executor.map(worker_wrapper, tasks):
+                completed += 1
                 results.append(result)
                 
-                # 只保存成功的结果
                 if result.success:
+                    success_count += 1
                     with open(output_file, 'a', encoding='utf-8') as f:
                         f.write(json.dumps(asdict(result), ensure_ascii=False) + '\n')
+                
+                # Progress report
+                if completed % progress_interval == 0 or completed == total_tasks:
+                    elapsed = time.time() - start_time
+                    interval_time = time.time() - last_report_time
+                    speed = progress_interval / interval_time if completed % progress_interval == 0 else completed / elapsed
+                    eta = (total_tasks - completed) / speed if speed > 0 else 0
+                    success_rate = success_count / completed * 100
+                    
+                    print(f"\n{'='*70}")
+                    print(f"Progress Report: {completed}/{total_tasks} tasks ({completed/total_tasks*100:.1f}%)")
+                    print(f"  Success: {success_count} ({success_rate:.1f}%)")
+                    print(f"  Failed: {completed - success_count}")
+                    print(f"  Speed: {speed:.1f} tasks/sec")
+                    print(f"  Elapsed: {elapsed:.0f}s | ETA: {eta:.0f}s")
+                    print(f"{'='*70}\n")
+                    
+                    last_report_time = time.time()
     
     # 统计结果
     total = len(results)
@@ -492,28 +543,32 @@ def run_batch_experiment(A_sequences: List[Dict],
     for r in results:
         mode_stats[r.mode] = mode_stats.get(r.mode, 0) + 1
     
-    avg_time_total = np.mean([r.time_total for r in results])
-    avg_time_template = np.mean([r.time_template for r in results])
-    avg_time_beam = np.mean([r.time_beam for r in results if r.time_beam > 0])
+    avg_time_total = np.mean([r.time_total for r in results]) if results else 0
+    avg_time_template = np.mean([r.time_template for r in results]) if results else 0
+    avg_time_beam = np.mean([r.time_beam for r in results if r.time_beam > 0]) if any(r.time_beam > 0 for r in results) else 0
+    
+    total_elapsed = time.time() - start_time
     
     # 打印统计信息
     print("\n" + "="*80)
-    print("实验统计结果")
+    print("Experiment Statistics")
     print("="*80)
-    print(f"总任务数: {total}")
-    print(f"成功数: {success} ({success/total*100:.2f}%)")
-    print(f"失败数: {failed} ({failed/total*100:.2f}%)")
-    print(f"\n✅ 成功结果已保存到: {output_file}")
-    print(f"   (仅包含{success}条成功记录，失败记录未保存)")
-    print(f"\n各模式统计:")
+    print(f"Total tasks: {total}")
+    print(f"Success: {success} ({success/total*100:.2f}%)")
+    print(f"Failed: {failed} ({failed/total*100:.2f}%)")
+    print(f"\nResults saved to: {output_file}")
+    print(f"  (Only {success} successful records saved, failures not saved)")
+    print(f"\nMode breakdown:")
     for mode, count in sorted(mode_stats.items(), key=lambda x: x[1], reverse=True):
         emoji = "✓" if mode != "failed" else "✗"
         print(f"  {emoji} {mode:30s}: {count:6d} ({count/total*100:.2f}%)")
-    print(f"\n平均耗时:")
-    print(f"  总耗时: {avg_time_total:.3f}秒")
-    print(f"  模板匹配: {avg_time_template:.3f}秒")
+    print(f"\nAverage time:")
+    print(f"  Total: {avg_time_total:.3f}s")
+    print(f"  Template matching: {avg_time_template:.3f}s")
     if avg_time_beam > 0:
-        print(f"  Beam搜索: {avg_time_beam:.3f}秒 (仅统计使用beam的任务)")
+        print(f"  Beam search: {avg_time_beam:.3f}s (only tasks using beam)")
+    print(f"\nTotal execution time: {total_elapsed:.1f}s ({total_elapsed/60:.1f} min)")
+    print(f"Average throughput: {total/total_elapsed:.2f} tasks/sec")
     print("="*80)
     
     # 保存统计信息
@@ -522,20 +577,22 @@ def run_batch_experiment(A_sequences: List[Dict],
         'total': total,
         'success': success,
         'failed': failed,
-        'success_rate': success / total,
+        'success_rate': success / total if total > 0 else 0,
         'mode_stats': mode_stats,
         'avg_time_total': avg_time_total,
         'avg_time_template': avg_time_template,
-        'avg_time_beam': avg_time_beam if avg_time_beam > 0 else 0,
-        'note': f'结果文件仅包含{success}条成功记录，失败记录未保存',
+        'avg_time_beam': avg_time_beam,
+        'total_execution_time': total_elapsed,
+        'throughput_tasks_per_sec': total / total_elapsed if total_elapsed > 0 else 0,
+        'note': f'Results file contains only {success} successful records, failures not saved',
         'config': config
     }
     
     with open(stats_file, 'w', encoding='utf-8') as f:
         json.dump(stats, f, indent=2, ensure_ascii=False)
     
-    logger.info(f"结果已保存到: {output_file}")
-    logger.info(f"统计信息已保存到: {stats_file}")
+    logger.info(f"Results saved to: {output_file}")
+    logger.info(f"Statistics saved to: {stats_file}")
     
     return results
 

@@ -173,3 +173,4 @@ oeis_seq_labeled/
 *.zip
 _d/
 data_gen/
+test.yaml
