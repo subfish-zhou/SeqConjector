@@ -32,19 +32,23 @@ class Config:
     FEATURE_DIM = 54         # enhanced_features 输出维度
     
     # ==================== 模型配置 ====================
-    # Transformer参数
-    D_MODEL = 256
-    NHEAD = 4
-    NLAYERS = 4
-    D_FF = 1024
+    # Transformer参数（针对2M数据优化，适配6GB显存）
+    D_MODEL = 384            # 从256增加到384，提升表达能力
+    NHEAD = 6                # 从8调整为6（需能被d_model整除）
+    NLAYERS = 6              # 保持6层
+    D_FF = 1536              # 从1024增加到1536（约4倍d_model）
     DROPOUT = 0.1
     CTX_LEN = 64
     
     # ==================== 训练配置 ====================
-    DEFAULT_LR = 3e-4
-    DEFAULT_BATCH_SIZE = 128
-    DEFAULT_STEPS = 20000
+    DEFAULT_LR = 2e-4        # 从3e-4降低到2e-4，更稳定
+    DEFAULT_BATCH_SIZE = 64  # 从128降低到64，适配6GB显存
+    DEFAULT_STEPS = 30000    # 从20000增加到30000，充分利用2M数据
     LAMBDA_EXEC = 0.1        # 执行损失权重
+    WARMUP_STEPS = 1000      # 学习率warmup步数
+    GRADIENT_ACCUMULATION = 2  # 梯度累积步数，有效batch_size = 64 * 2 = 128
+    WEIGHT_DECAY = 0.01      # 权重衰减
+    MIN_LR = 1e-5            # 最小学习率（用于学习率调度）
     
     # ==================== 数据生成配置 ====================
     # 序列长度

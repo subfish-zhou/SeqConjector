@@ -9,13 +9,13 @@
 mkdir -p data_gen
 
 echo "Generating Easy batch (500k)..."
-python generate_data.py --out_dir data_gen --total_samples 500000 --difficulty 0.2 --prefix "easy" --seed 1000 --workers 8
+python generate_data.py --out_dir data_gen --total_samples 500000 --difficulty 0.2 --prefix "easy" --seed 1000 --workers 12
 
 echo "Generating Medium batch (1M)..."
-python generate_data.py --out_dir data_gen --total_samples 1000000 --difficulty 0.5 --prefix "medium" --seed 2000 --workers 8
+python generate_data.py --out_dir data_gen --total_samples 1000000 --difficulty 0.5 --prefix "medium" --seed 2000 --workers 12
 
 echo "Generating Hard batch (500k)..."
-python generate_data.py --out_dir data_gen --total_samples 500000 --difficulty 0.9 --prefix "hard" --seed 3000 --workers 8
+python generate_data.py --out_dir data_gen --total_samples 500000 --difficulty 0.9 --prefix "hard" --seed 3000 --workers 12
 
 echo "Done. Total 2M samples ready in data_gen/"
 

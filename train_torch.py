@@ -1,11 +1,13 @@
 import argparse, random, json, torch, math, glob, os
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 from torch.amp import GradScaler
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR, LambdaLR
 from oeis.program import Node, Program
 from oeis.interpreter import Interpreter, ExecConfig
 from oeis.parser import parse_prefix
 from oeis.torch_model import Cfg, TransDecoder, stoi, TOKENS, enhanced_features
 from oeis.logging_config import setup_logger
+from oeis.config import Config
 
 # 设置日志
 logger = setup_logger("train", level="INFO")
@@ -38,17 +40,21 @@ class PreGeneratedDataset(IterableDataset):
         if not my_files:
             return
 
-        while True:
-            random.shuffle(my_files)
-            for fpath in my_files:
-                with open(fpath, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        try:
-                            item = json.loads(line)
-                            yield self._process_item(item)
-                        except: continue
-            if not self.cycle:
-                break
+        try:
+            while True:
+                random.shuffle(my_files)
+                for fpath in my_files:
+                    with open(fpath, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            try:
+                                item = json.loads(line)
+                                yield self._process_item(item)
+                            except: continue
+                if not self.cycle:
+                    break
+        except GeneratorExit:
+            # 优雅地处理生成器关闭，避免警告
+            pass
 
     def _process_item(self, item):
         A = item["A"]
@@ -117,12 +123,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="ckpt.pt")
     ap.add_argument("--data_dir", default="data_gen", help="Directory containing .jsonl data files")
-    ap.add_argument("--steps", type=int, default=20000)
-    ap.add_argument("--bs", type=int, default=128)
-    ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--amp", action="store_true")
-    ap.add_argument("--lambda_exec", type=float, default=0.1)
+    ap.add_argument("--steps", type=int, default=None, help="Training steps (default: from Config)")
+    ap.add_argument("--bs", type=int, default=None, help="Batch size (default: from Config)")
+    ap.add_argument("--lr", type=float, default=None, help="Learning rate (default: from Config)")
+    ap.add_argument("--amp", action="store_true", help="Enable mixed precision training")
+    ap.add_argument("--lambda_exec", type=float, default=None, help="Execution loss weight (default: from Config)")
+    ap.add_argument("--grad_accum", type=int, default=None, help="Gradient accumulation steps (default: from Config)")
+    ap.add_argument("--warmup_steps", type=int, default=None, help="Warmup steps (default: from Config)")
+    ap.add_argument("--save_every", type=int, default=5000, help="Save checkpoint every N steps")
     args = ap.parse_args()
+
+    # 使用Config的默认值
+    steps = args.steps if args.steps is not None else Config.DEFAULT_STEPS
+    batch_size = args.bs if args.bs is not None else Config.DEFAULT_BATCH_SIZE
+    lr = args.lr if args.lr is not None else Config.DEFAULT_LR
+    lambda_exec = args.lambda_exec if args.lambda_exec is not None else Config.LAMBDA_EXEC
+    grad_accum = args.grad_accum if args.grad_accum is not None else Config.GRADIENT_ACCUMULATION
+    warmup_steps = args.warmup_steps if args.warmup_steps is not None else Config.WARMUP_STEPS
 
     # Check if data exists
     if not os.path.exists(args.data_dir) or not glob.glob(os.path.join(args.data_dir, "*.jsonl")):
@@ -130,80 +147,168 @@ def main():
         return
 
     ds = PreGeneratedDataset(data_dir=args.data_dir)
-    dl = DataLoader(ds, batch_size=args.bs, num_workers=2, collate_fn=collate_batch)
+    dl = DataLoader(ds, batch_size=batch_size, num_workers=4, collate_fn=collate_batch)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = TransDecoder(Cfg(), vocab=len(TOKENS)).to(device)
     
+    # 使用Config中的模型配置
+    model_cfg_dict = Config.get_model_config()
+    model_cfg = Cfg(**model_cfg_dict)
+    model = TransDecoder(model_cfg, vocab=len(TOKENS)).to(device)
+    
+    # 计算参数量
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Model parameters: {total_params:,} total, {trainable_params:,} trainable")
+    
+    # 恢复检查点
+    start_step = 0
     if os.path.exists(args.out):
         logger.info(f"Resuming from checkpoint {args.out}")
         ckpt = torch.load(args.out, map_location=device)
         model.load_state_dict(ckpt["model"])
+        if "step" in ckpt:
+            start_step = ckpt["step"]
+            logger.info(f"Resuming from step {start_step}")
     
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    # 优化器和学习率调度
+    opt = torch.optim.AdamW(
+        model.parameters(), 
+        lr=lr,
+        weight_decay=Config.WEIGHT_DECAY,
+        betas=(0.9, 0.999)
+    )
     loss_fn = torch.nn.CrossEntropyLoss()
     scaler = GradScaler(enabled=(args.amp and device=="cuda"))
-    inter = Interpreter(ExecConfig(strict=True, t0=10, t_step=3))
+    inter = Interpreter(Config.get_interpreter_config(strict=True))
+    
+    # 学习率调度：warmup + cosine annealing
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            # Warmup阶段：线性增长
+            return float(current_step) / float(max(1, warmup_steps))
+        else:
+            # Cosine annealing阶段
+            progress = float(current_step - warmup_steps) / float(max(1, steps - warmup_steps))
+            return max(Config.MIN_LR / lr, 0.5 * (1.0 + math.cos(math.pi * progress)))
+    
+    scheduler = LambdaLR(opt, lr_lambda)
 
-    step=0
+    step = start_step
     model.train()
-    logger.info(f"Starting training: {args.steps} steps, batch_size={args.bs}, device={device}")
-    logger.info(f"Data directory: {args.data_dir}")
+    effective_batch_size = batch_size * grad_accum
+    logger.info(f"Starting training:")
+    logger.info(f"  Steps: {steps}")
+    logger.info(f"  Batch size: {batch_size} (effective: {effective_batch_size} with grad_accum={grad_accum})")
+    logger.info(f"  Learning rate: {lr}")
+    logger.info(f"  Warmup steps: {warmup_steps}")
+    logger.info(f"  Device: {device}")
+    logger.info(f"  Mixed precision: {args.amp}")
+    logger.info(f"  Data directory: {args.data_dir}")
 
     # Use iterator for infinite loop control
     data_iter = iter(dl)
+    accumulated_loss = 0.0
+    accumulated_ce_loss = 0.0
 
-    while step < args.steps:
-        try:
-            batch = next(data_iter)
-        except StopIteration:
-            data_iter = iter(dl)
-            batch = next(data_iter)
-
-        x = batch["x"].to(device); y=batch["y"].to(device); feat=batch["feat"].to(device)
-        A = batch["A"].to("cpu"); B = batch["B"].to("cpu"); is_moon = batch["is_moon"].to("cpu")
-        
+    while step < steps:
+        # 梯度累积循环
         opt.zero_grad(set_to_none=True)
-        with torch.amp.autocast(device_type=("cuda" if device=="cuda" else "cpu"), enabled=(args.amp and device=="cuda")):
-            logits = model(x, feat)
-            loss_ce = loss_fn(logits.reshape(-1, logits.size(-1)), y.view(-1))
+        batch_loss = 0.0
+        batch_ce_loss = 0.0
         
-        loss = loss_ce
-        if args.lambda_exec > 0:
-            exec_losses=[]
-            toks_batch = []
-            for row in y:
-                toks = []
-                for idx in row.tolist():
-                    if idx == -100: break
-                    tok = TOKENS[idx]
-                    if tok == "<EOS>": break
-                    toks.append(tok)
-                toks_batch.append(toks)
-            take = min(8, len(toks_batch))
-            idxs = random.sample(range(len(toks_batch)), take)
-            for j in idxs:
-                if is_moon[j].item() == 1:
-                    Aj = [int(v) for v in A[j].tolist() if v!=0]
-                    Bj = [int(v) for v in B[j].tolist() if v!=0]
-                    toks = toks_batch[j]
-                    if len(toks)>0:
-                        el = exec_loss_moon(inter, toks, Aj, Bj)
-                        exec_losses.append(el)
-            if exec_losses:
-                loss_exec = torch.stack(exec_losses).mean().to(device)
-                loss = loss_ce + args.lambda_exec * loss_exec
+        for accum_step in range(grad_accum):
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                data_iter = iter(dl)
+                batch = next(data_iter)
 
-        scaler.scale(loss).backward()
-        scaler.step(opt); scaler.update()
+            x = batch["x"].to(device)
+            y = batch["y"].to(device)
+            feat = batch["feat"].to(device)
+            A = batch["A"].to("cpu")
+            B = batch["B"].to("cpu")
+            is_moon = batch["is_moon"].to("cpu")
+            
+            with torch.amp.autocast(device_type=("cuda" if device=="cuda" else "cpu"), enabled=(args.amp and device=="cuda")):
+                logits = model(x, feat)
+                loss_ce = loss_fn(logits.reshape(-1, logits.size(-1)), y.view(-1))
+            
+            loss = loss_ce
+            if lambda_exec > 0:
+                exec_losses = []
+                toks_batch = []
+                for row in y:
+                    toks = []
+                    for idx in row.tolist():
+                        if idx == -100: break
+                        tok = TOKENS[idx]
+                        if tok == "<EOS>": break
+                        toks.append(tok)
+                    toks_batch.append(toks)
+                take = min(8, len(toks_batch))
+                idxs = random.sample(range(len(toks_batch)), take)
+                for j in idxs:
+                    if is_moon[j].item() == 1:
+                        Aj = [int(v) for v in A[j].tolist() if v!=0]
+                        Bj = [int(v) for v in B[j].tolist() if v!=0]
+                        toks = toks_batch[j]
+                        if len(toks) > 0:
+                            el = exec_loss_moon(inter, toks, Aj, Bj)
+                            exec_losses.append(el)
+                if exec_losses:
+                    loss_exec = torch.stack(exec_losses).mean().to(device)
+                    loss = loss_ce + lambda_exec * loss_exec
+            
+            # 梯度累积：除以累积步数
+            scaled_loss = loss / grad_accum
+            scaler.scale(scaled_loss).backward()
+            
+            batch_loss += loss.item()
+            batch_ce_loss += loss_ce.item()
         
+        # 更新参数
+        scaler.step(opt)
+        scaler.update()
+        scheduler.step()
+        
+        accumulated_loss += batch_loss / grad_accum
+        accumulated_ce_loss += batch_ce_loss / grad_accum
+        
+        # 日志输出
         if step % 50 == 0:
-            logger.info(f"step {step}/{args.steps} loss {loss.item():.4f} (ce {loss_ce.item():.4f})")
+            avg_loss = accumulated_loss / min(50, step + 1)
+            avg_ce_loss = accumulated_ce_loss / min(50, step + 1)
+            current_lr = scheduler.get_last_lr()[0]
+            logger.info(f"step {step}/{steps} | loss {avg_loss:.4f} (ce {avg_ce_loss:.4f}) | lr {current_lr:.6f}")
+            accumulated_loss = 0.0
+            accumulated_ce_loss = 0.0
+        
+        # 定期保存检查点
+        if step > 0 and step % args.save_every == 0:
+            checkpoint_path = args.out.replace(".pt", f"_step{step}.pt")
+            torch.save({
+                "cfg": model.cfg.__dict__,
+                "model": model.state_dict(),
+                "step": step,
+                "optimizer": opt.state_dict(),
+                "scheduler": scheduler.state_dict()
+            }, checkpoint_path)
+            logger.info(f"Checkpoint saved to {checkpoint_path}")
         
         step += 1
-        if step >= args.steps: break
+        if step >= steps:
+            break
             
-    torch.save({"cfg":model.cfg.__dict__, "model":model.state_dict()}, args.out)
+    # 保存最终模型
+    torch.save({
+        "cfg": model.cfg.__dict__,
+        "model": model.state_dict(),
+        "step": step,
+        "optimizer": opt.state_dict(),
+        "scheduler": scheduler.state_dict()
+    }, args.out)
     logger.info(f"Training completed. Model saved to {args.out}")
 
 if __name__ == "__main__":
