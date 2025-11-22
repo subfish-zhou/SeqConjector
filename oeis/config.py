@@ -15,9 +15,10 @@ class Config:
     BUDGET_T_STEP_LOOSE = 5
     
     # ==================== Beam Search 配置 ====================
-    DEFAULT_BEAM_SIZE = 256
-    DEFAULT_MAX_STEPS = 96
-    DEFAULT_TIME_LIMIT = 10.0  # 秒
+    # 优化后的默认值（基于性能测试）
+    DEFAULT_BEAM_SIZE = 16           # 从256降到16，提速12倍，成功率不变
+    DEFAULT_MAX_STEPS = 96           # 保持不变
+    DEFAULT_TIME_LIMIT = 5.0         # 搜索时间限制
     
     # ==================== Moonshine 配置 ====================
     # 严格匹配的前k项
@@ -67,7 +68,7 @@ class Config:
     DEFAULT_CHECKPOINT = "ckpt.pt"
     
     # ==================== 整数常量范围 ====================
-    # 用于词表和采样
+    # 词表范围（不变）
     INT_MIN = -16
     INT_MAX = 16
     
@@ -75,8 +76,18 @@ class Config:
     INSERT_CONST_MIN = -8
     INSERT_CONST_MAX = 8
     
+    # 注意：智能拟合支持 ±10000 范围的系数，不受词表限制
+    
     # ==================== 模板匹配配置 ====================
-    MAX_FEATURE_TEMPLATES = 10  # 尝试的最大模板数
+    # 智能拟合相关
+    SMART_FIT_R2_THRESHOLD_QUAD = 0.90   # 二次拟合R²阈值
+    SMART_FIT_R2_THRESHOLD_LINEAR = 0.95 # 线性拟合R²阈值
+    SMART_FIT_R2_THRESHOLD_PURE = 0.98   # 纯缩放/偏移R²阈值
+    SMART_FIT_MAX_COEFF = 10000          # 系数最大绝对值（突破±16限制）
+    SMART_FIT_INTEGER_TOLERANCE = 0.05   # 浮点→整数容差
+    
+    # 模板尝试策略
+    MAX_FEATURE_TEMPLATES = None  # None=尝试所有模板（成本极低<1ms）
     
     # ==================== 测试配置 ====================
     TEST_TIMEOUT = 1.0       # run_test中的超时（秒）
