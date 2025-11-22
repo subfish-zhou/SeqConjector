@@ -83,8 +83,11 @@ def solve_pair(task):
         relerr0 = 2e-3
         relerr_hi = 0.10
         
+        from oeis.torch_model import enhanced_features
+        feat = enhanced_features(A_vis, B_vis)
+
         toks = egd_beam_search(
-            worker_model, A_vis, B_vis,
+            worker_model, A_vis, B_vis, feat,
             beam=256, # Standard beam size
             max_steps=96,
             use_ratio=True,

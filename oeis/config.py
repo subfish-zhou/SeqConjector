@@ -44,7 +44,6 @@ class Config:
     DEFAULT_LR = 2e-4        # 从3e-4降低到2e-4，更稳定
     DEFAULT_BATCH_SIZE = 64  # 从128降低到64，适配6GB显存
     DEFAULT_STEPS = 30000    # 从20000增加到30000，充分利用2M数据
-    LAMBDA_EXEC = 0.1        # 执行损失权重
     WARMUP_STEPS = 1000      # 学习率warmup步数
     GRADIENT_ACCUMULATION = 2  # 梯度累积步数，有效batch_size = 64 * 2 = 128
     WEIGHT_DECAY = 0.01      # 权重衰减

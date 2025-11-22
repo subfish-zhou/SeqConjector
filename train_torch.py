@@ -79,35 +79,6 @@ class PreGeneratedDataset(IterableDataset):
             "is_moon": torch.tensor(1 if is_moon else 0, dtype=torch.long)
         }
 
-# Keep helper functions
-def exec_loss_moon(inter, toks, A_vis, B_vis, k_strict=3, tau0=2e-3, tau1=1e-3, use_log=True):
-    from oeis.parser import parse_prefix as parse2
-    A_list = A_vis.tolist() if hasattr(A_vis, "tolist") else list(A_vis)
-    B_list = B_vis.tolist() if hasattr(B_vis, "tolist") else list(B_vis)
-    try:
-        P = parse2([t for t in toks])
-        r = inter.execute(P, A_list)
-    except: return torch.tensor(0.0)
-
-    if (not r.ok) or (r.seq is None) or len(r.seq)<len(A_list):
-        return torch.tensor(0.0)
-    
-    Bh = r.seq[:len(A_list)]
-    Bt = B_list[:len(A_list)]
-    K = min(k_strict, len(Bt))
-    head_err = sum(1.0 for i in range(K) if Bh[i] != Bt[i]) / max(1, K)
-    tail_es = []
-    eps = 1e-12
-    for i in range(K, len(Bt)):
-        y = Bt[i]; x = Bh[i]
-        if y == 0: continue
-        ratio = (abs(x)+eps)/(abs(y)+eps)
-        e = abs(math.log(ratio)) if use_log else abs(1.0 - x/(y+eps))
-        thr = tau0 + tau1 * i
-        tail_es.append(max(0.0, e - thr))
-    tail_err = sum(tail_es)/max(1, len(tail_es))
-    return torch.tensor(head_err + tail_err, dtype=torch.float32)
-
 def collate_batch(batch):
     return {
         "x": torch.nn.utils.rnn.pad_sequence([v["x"] for v in batch], batch_first=True, padding_value=0),
@@ -127,7 +98,6 @@ def main():
     ap.add_argument("--bs", type=int, default=None, help="Batch size (default: from Config)")
     ap.add_argument("--lr", type=float, default=None, help="Learning rate (default: from Config)")
     ap.add_argument("--amp", action="store_true", help="Enable mixed precision training")
-    ap.add_argument("--lambda_exec", type=float, default=None, help="Execution loss weight (default: from Config)")
     ap.add_argument("--grad_accum", type=int, default=None, help="Gradient accumulation steps (default: from Config)")
     ap.add_argument("--warmup_steps", type=int, default=None, help="Warmup steps (default: from Config)")
     ap.add_argument("--save_every", type=int, default=5000, help="Save checkpoint every N steps")
@@ -137,7 +107,6 @@ def main():
     steps = args.steps if args.steps is not None else Config.DEFAULT_STEPS
     batch_size = args.bs if args.bs is not None else Config.DEFAULT_BATCH_SIZE
     lr = args.lr if args.lr is not None else Config.DEFAULT_LR
-    lambda_exec = args.lambda_exec if args.lambda_exec is not None else Config.LAMBDA_EXEC
     grad_accum = args.grad_accum if args.grad_accum is not None else Config.GRADIENT_ACCUMULATION
     warmup_steps = args.warmup_steps if args.warmup_steps is not None else Config.WARMUP_STEPS
 
@@ -180,7 +149,7 @@ def main():
     )
     loss_fn = torch.nn.CrossEntropyLoss()
     scaler = GradScaler(enabled=(args.amp and device=="cuda"))
-    inter = Interpreter(Config.get_interpreter_config(strict=True))
+    # inter = Interpreter(Config.get_interpreter_config(strict=True)) # 移除解释器
     
     # 学习率调度：warmup + cosine annealing
     def lr_lambda(current_step):
@@ -209,13 +178,11 @@ def main():
     # Use iterator for infinite loop control
     data_iter = iter(dl)
     accumulated_loss = 0.0
-    accumulated_ce_loss = 0.0
-
+    
     while step < steps:
         # 梯度累积循环
         opt.zero_grad(set_to_none=True)
         batch_loss = 0.0
-        batch_ce_loss = 0.0
         
         for accum_step in range(grad_accum):
             try:
@@ -227,46 +194,16 @@ def main():
             x = batch["x"].to(device)
             y = batch["y"].to(device)
             feat = batch["feat"].to(device)
-            A = batch["A"].to("cpu")
-            B = batch["B"].to("cpu")
-            is_moon = batch["is_moon"].to("cpu")
             
             with torch.amp.autocast(device_type=("cuda" if device=="cuda" else "cpu"), enabled=(args.amp and device=="cuda")):
                 logits = model(x, feat)
-                loss_ce = loss_fn(logits.reshape(-1, logits.size(-1)), y.view(-1))
-            
-            loss = loss_ce
-            if lambda_exec > 0:
-                exec_losses = []
-                toks_batch = []
-                for row in y:
-                    toks = []
-                    for idx in row.tolist():
-                        if idx == -100: break
-                        tok = TOKENS[idx]
-                        if tok == "<EOS>": break
-                        toks.append(tok)
-                    toks_batch.append(toks)
-                take = min(8, len(toks_batch))
-                idxs = random.sample(range(len(toks_batch)), take)
-                for j in idxs:
-                    if is_moon[j].item() == 1:
-                        Aj = [int(v) for v in A[j].tolist() if v!=0]
-                        Bj = [int(v) for v in B[j].tolist() if v!=0]
-                        toks = toks_batch[j]
-                        if len(toks) > 0:
-                            el = exec_loss_moon(inter, toks, Aj, Bj)
-                            exec_losses.append(el)
-                if exec_losses:
-                    loss_exec = torch.stack(exec_losses).mean().to(device)
-                    loss = loss_ce + lambda_exec * loss_exec
+                loss = loss_fn(logits.reshape(-1, logits.size(-1)), y.view(-1))
             
             # 梯度累积：除以累积步数
             scaled_loss = loss / grad_accum
             scaler.scale(scaled_loss).backward()
             
             batch_loss += loss.item()
-            batch_ce_loss += loss_ce.item()
         
         # 更新参数
         scaler.step(opt)
@@ -274,16 +211,13 @@ def main():
         scheduler.step()
         
         accumulated_loss += batch_loss / grad_accum
-        accumulated_ce_loss += batch_ce_loss / grad_accum
         
         # 日志输出
         if step % 50 == 0:
             avg_loss = accumulated_loss / min(50, step + 1)
-            avg_ce_loss = accumulated_ce_loss / min(50, step + 1)
             current_lr = scheduler.get_last_lr()[0]
-            logger.info(f"step {step}/{steps} | loss {avg_loss:.4f} (ce {avg_ce_loss:.4f}) | lr {current_lr:.6f}")
+            logger.info(f"step {step}/{steps} | loss {avg_loss:.4f} | lr {current_lr:.6f}")
             accumulated_loss = 0.0
-            accumulated_ce_loss = 0.0
         
         # 定期保存检查点
         if step > 0 and step % args.save_every == 0:

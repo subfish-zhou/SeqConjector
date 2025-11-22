@@ -74,7 +74,7 @@ def longest_prefix_parse(tokens: List[str]) -> int:
         except: pass
     return 0
 
-def egd_beam_search(model, A_vis, B_vis, beam=256, max_steps=96,
+def egd_beam_search(model, A_vis, B_vis, feat, beam=256, max_steps=96,
                     use_ratio=True, k_strict=3,
                     err_thr_lo=0.02, err_thr_hi=0.10,
                     time_limit=10.0):

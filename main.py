@@ -177,7 +177,7 @@ def cmd_beam(args):
 
     t_beam0 = time.time()
     toks = egd_beam_search(
-        model, A_vis, B_vis,
+        model, A_vis, B_vis, feat,
         beam=args.beam,
         max_steps=getattr(args, "max_steps", 96),
         use_ratio=True,
