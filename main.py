@@ -138,7 +138,7 @@ def cmd_beam(args):
         k_strict=args.k_strict,
         tau0=args.relerr0,
         tau1=args.relerr_step,
-        max_templates=10  # Try top 10 templates
+        max_templates=None  # Try all templates
     )
     t_feat_tpl = time.time() - t_feat_tpl0
     

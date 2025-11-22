@@ -7,6 +7,12 @@ dramatically reducing the need for expensive beam search.
 
 from typing import List, Tuple, Optional
 import numpy as np
+from oeis.smart_polynomial import (
+    fit_quadratic_integer, 
+    fit_linear_integer,
+    fit_scale_integer,
+    fit_offset_integer
+)
 
 
 def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[Tuple[int, List[str], str]]:
@@ -52,15 +58,86 @@ def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[T
     is_periodic = float(feat[52])
     is_piecewise = float(feat[53])
     
-    # 1. Direct boolean matches (highest priority 90-100)
+    # ============================================================
+    # 0. ULTRA HIGH PRIORITY: Smart polynomial fitting
+    #    直接计算最佳系数，不受±16限制
+    # ============================================================
+    
+    # 0a. 二次关系: B = a*A² + b*A + c
+    quad_result = fit_quadratic_integer(A, B, r2_threshold=0.90, max_coeff=10000)
+    if quad_result is not None:
+        a, b, c = quad_result
+        templates.append((100, 
+                        ["POLY", str(a), str(b), str(c), "A"], 
+                        f"Smart quad: {a}*x²{b:+d}*x{c:+d}"))
+    
+    # 0b. 线性关系: B = k*A + c  
+    linear_result = fit_linear_integer(A, B, r2_threshold=0.95, max_coeff=10000)
+    if linear_result is not None:
+        k, c = linear_result
+        if c == 0:
+            # 纯缩放: B = k*A
+            templates.append((99, 
+                            ["SCALE", str(k), "A"], 
+                            f"Smart scale: {k}*A"))
+        elif k == 1:
+            # 纯偏移: B = A + c
+            templates.append((99, 
+                            ["OFFSET", str(c), "A"], 
+                            f"Smart offset: A{c:+d}"))
+        else:
+            # 线性组合: B = k*A + c
+            templates.append((98, 
+                            ["OFFSET", str(c), "SCALE", str(k), "A"], 
+                            f"Smart linear: {k}*A{c:+d}"))
+    
+    # 0c. 纯缩放: B = k*A
+    scale_result = fit_scale_integer(A, B, r2_threshold=0.98, max_coeff=10000)
+    if scale_result is not None:
+        k = scale_result
+        templates.append((97, 
+                        ["SCALE", str(k), "A"], 
+                        f"Smart scale: {k}*A"))
+    
+    # 0d. 纯偏移: B = A + c
+    offset_result = fit_offset_integer(A, B, r2_threshold=0.98, max_coeff=10000)
+    if offset_result is not None:
+        c = offset_result
+        templates.append((96, 
+                        ["OFFSET", str(c), "A"], 
+                        f"Smart offset: A{c:+d}"))
+    
+    # ============================================================
+    # 1. 常见模式的备用模板（如果智能拟合失败）
+    # ============================================================
+    # Direct check: does B look like (A-k)²?
+    if len(A) >= 5 and len(B) >= 5:
+        # Test if B ≈ (A-c)² for c in [-2, -1, 0, 1, 2]
+        for c in [1, 2, 0, -1, -2]:
+            # (x-c)² = x² - 2cx + c²
+            a_coeff = 1
+            b_coeff = -2 * c
+            c_coeff = c * c
+            templates.append((90 - abs(c), 
+                            ["POLY", str(a_coeff), str(b_coeff), str(c_coeff), "A"], 
+                            f"Common: (x{c:+d})²"))
+    
+    # Other common polynomials (backup)
+    templates.append((85, ["POLY", "1", "1", "0", "A"], "Common: x²+x"))
+    templates.append((84, ["POLY", "1", "-1", "0", "A"], "Common: x²-x"))
+    templates.append((83, ["POLY", "1", "0", "0", "A"], "Common: x²"))
+    templates.append((82, ["POLY", "1", "0", "1", "A"], "Common: x²+1"))
+    templates.append((81, ["POLY", "1", "0", "-1", "A"], "Common: x²-1"))
+    
+    # 2. Direct boolean matches (priority 70-79)
     if is_scan > 0.5:
-        templates.append((100, ["SCAN_ADD", "A"], "Cumulative sum (is_scan)"))
+        templates.append((79, ["SCAN_ADD", "A"], "Cumulative sum (is_scan)"))
     
     if is_diff > 0.5:
-        templates.append((100, ["DIFF_FWD", "1", "A"], "Forward difference (is_diff)"))
+        templates.append((79, ["DIFF_FWD", "1", "A"], "Forward difference (is_diff)"))
     
     if is_scale2 > 0.5:
-        templates.append((100, ["SCALE", "2", "A"], "Scale by 2 (is_scale2)"))
+        templates.append((79, ["SCALE", "2", "A"], "Scale by 2 (is_scale2)"))
     
     # 2. Power law relationships (80-90)
     if 1.8 < power_exp < 2.2 and r2_square > 0.90:
@@ -114,6 +191,9 @@ def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[T
         templates.append((58, ["POLY", "1", "1", "0", "A"], "Polynomial: x²+x"))
         templates.append((56, ["POLY", "1", "0", "1", "A"], "Polynomial: x²+1"))
     
+    # 7b. Common polynomial shifts (HIGH PRIORITY!)
+    # Removed duplicate - moved to section 0 above
+    
     # 8. Moonshine-specific templates (50-55)
     # These use actual B values for INSERT constants
     if len(B) >= 2:
@@ -162,7 +242,7 @@ def try_feature_templates(A: List[int], B: List[int], feat,
                          k_strict: int = 3,
                          tau0: float = 2e-3,
                          tau1: float = 1e-3,
-                         max_templates: int = 10) -> Tuple[Optional[List[str]], Optional[object]]:
+                         max_templates: int = None) -> Tuple[Optional[List[str]], Optional[object]]:
     """
     Try feature-driven templates and return the first one that passes.
     
@@ -172,7 +252,7 @@ def try_feature_templates(A: List[int], B: List[int], feat,
         n_in, n_chk: Train/validation split
         checker_mode: "exact" or "moonshine"
         k_strict, tau0, tau1: Moonshine parameters
-        max_templates: Maximum number of templates to try
+        max_templates: Maximum number of templates to try (None = try all)
         
     Returns:
         (best_tokens, best_report) if found, else (None, None)
@@ -182,7 +262,9 @@ def try_feature_templates(A: List[int], B: List[int], feat,
     templates = generate_templates_from_features(A, B, feat)
     
     # Limit the number of templates to try (performance)
-    templates = templates[:max_templates]
+    # If max_templates is None, try all templates
+    if max_templates is not None:
+        templates = templates[:max_templates]
     
     for priority, toks, desc in templates:
         try:
