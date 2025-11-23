@@ -49,12 +49,13 @@ class PreGeneratedDataset(IterableDataset):
                             try:
                                 item = json.loads(line)
                                 yield self._process_item(item)
-                            except: continue
+                            except:
+                                continue
                 if not self.cycle:
                     break
         except GeneratorExit:
-            # 优雅地处理生成器关闭，避免警告
-            pass
+            # 优雅地处理生成器关闭，避免 RuntimeError: generator ignored GeneratorExit
+            return
 
     def _process_item(self, item):
         A = item["A"]

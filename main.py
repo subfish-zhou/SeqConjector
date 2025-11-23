@@ -25,13 +25,11 @@ def try_templates_moonshine(A, B, n_in, n_chk, k_strict=3, tau0=2e-3, tau1=1e-3)
     cands.append(("SCAN_ADD", toks1))
 
     if N2 >= 2 and len(B) >= 2:
-        c = B[1]
-        toks2 = ["INSERT1", str(c), "SCAN_ADD", "A"]
+        toks2 = ["INSERT1", "SCAN_ADD", "A"]
         cands.append(("INS1", toks2))
 
     if N2 >= 3 and len(B) >= 3:
-        c = B[2]
-        toks3 = ["INSERT2", str(c), "SCAN_ADD", "A"]
+        toks3 = ["INSERT2", "SCAN_ADD", "A"]
         cands.append(("INS2", toks3))
 
     best = None  # (rmse, toks, rep)

@@ -174,3 +174,4 @@ oeis_seq_labeled/
 _d/
 data_gen/
 test.yaml
+ckpt/

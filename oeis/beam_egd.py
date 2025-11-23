@@ -143,10 +143,10 @@ def egd_beam_search(model, A_vis, B_vis, feat, beam=256, max_steps=96,
                     # 检查程序是否包含 A
                     if not prog.contains_A():
                         continue
-                    rL = inter_loose.execute(prog, A_vis)
+                    rL = inter_loose.execute(prog, A_vis, B_vis)
                     if rL.ok and rL.seq is not None and len(rL.seq) >= len(B_vis):
                         # 严格前缀校验：提前淘汰越界/未定义
-                        rS = inter_strict.execute(prog, A_vis)
+                        rS = inter_strict.execute(prog, A_vis, B_vis)
                         if not (rS.ok and rS.seq is not None and len(rS.seq) >= len(B_vis)):
                             continue
                         ok_head, rmse, thr = prefix_error(rL.seq, B_vis)

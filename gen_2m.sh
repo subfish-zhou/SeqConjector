@@ -17,5 +17,12 @@ python generate_data.py --out_dir data_gen --total_samples 1000000 --difficulty 
 echo "Generating Hard batch (500k)..."
 python generate_data.py --out_dir data_gen --total_samples 500000 --difficulty 0.9 --prefix "hard" --seed 3000 --workers 12
 
-echo "Done. Total 2M samples ready in data_gen/"
+echo "Generating RL Optimization batch (100k)..."
+python generate_data.py --out_dir data_gen --total_samples 100000 --difficulty 0.8 --real_ratio 0.8 --prefix "rl" --seed 4000 --workers 12
 
+echo "Done. Total 2.1M samples ready in data_gen/"
+
+echo "Starting supervised training on generated data..."
+python train_torch.py --out ckpt_256.pt --steps 30000 --bs 128 --amp
+
+echo "Supervised training finished. Checkpoint saved to ckpt_256.pt"

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import List
 import numpy as np
 import warnings
+from scipy import stats
 warnings.filterwarnings('ignore')
 
 # Import safe utility functions
@@ -27,44 +28,51 @@ itos = {i:t for t,i in stoi.items()}
 
 
 # =============================================================================
-# Statistical utility functions (to avoid scipy dependency)
+# Statistical utility functions (using scipy)
 # =============================================================================
 
 def _skew(x):
     """Compute skewness"""
-    x_mean = np.mean(x)
-    x_std = np.std(x)
-    if x_std < 1e-12:
+    # Handle constant arrays or empty arrays to avoid warnings/nans
+    if len(x) < 2 or np.std(x) < 1e-12:
         return 0.0
-    return np.mean(((x - x_mean) / x_std) ** 3)
+    val = stats.skew(x)
+    return 0.0 if np.isnan(val) else float(val)
 
 def _kurtosis(x):
     """Compute excess kurtosis"""
-    x_mean = np.mean(x)
-    x_std = np.std(x)
-    if x_std < 1e-12:
+    if len(x) < 2 or np.std(x) < 1e-12:
         return 0.0
-    return np.mean(((x - x_mean) / x_std) ** 4) - 3
+    val = stats.kurtosis(x)
+    return 0.0 if np.isnan(val) else float(val)
 
 def _spearmanr(x, y):
     """Spearman rank correlation coefficient"""
-    rank_x = np.argsort(np.argsort(x))
-    rank_y = np.argsort(np.argsort(y))
-    return np.corrcoef(rank_x, rank_y)[0, 1]
+    try:
+        res = stats.spearmanr(x, y)
+        # Handle both old scipy (tuple) and new scipy (object)
+        val = res.statistic if hasattr(res, 'statistic') else res[0]
+        if np.isnan(val): return 0.0
+        # Fix floating point errors
+        if val > 1.0 - 1e-9: return 1.0
+        if val < -1.0 + 1e-9: return -1.0
+        return float(val)
+    except:
+        return 0.0
 
 def _kendalltau(x, y):
-    """Kendall tau correlation coefficient (simplified version)"""
-    n = len(x)
-    concordant = 0
-    discordant = 0
-    for i in range(n):
-        for j in range(i+1, n):
-            if (x[i] - x[j]) * (y[i] - y[j]) > 0:
-                concordant += 1
-            elif (x[i] - x[j]) * (y[i] - y[j]) < 0:
-                discordant += 1
-    tau = (concordant - discordant) / (concordant + discordant + 1e-12)
-    return tau
+    """Kendall tau correlation coefficient"""
+    try:
+        res = stats.kendalltau(x, y)
+        # Handle both old scipy (tuple) and new scipy (object)
+        val = res.statistic if hasattr(res, 'statistic') else res[0]
+        if np.isnan(val): return 0.0
+        # Fix floating point errors
+        if val > 1.0 - 1e-9: return 1.0
+        if val < -1.0 + 1e-9: return -1.0
+        return float(val)
+    except:
+        return 0.0
 
 
 # =============================================================================

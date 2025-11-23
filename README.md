@@ -5,7 +5,7 @@
 **Training**
 
 ```bash
-python train_torch.py --out ckpt.pt --steps 20000 --bs 128 --m 200000 --moonshine_prob 0.1 --lambda_exec 0.1 --amp
+python train_torch.py --out ckpt.pt --steps 20000 --bs 128 --amp
 ```
 
 **Inference**
@@ -42,11 +42,11 @@ python main.py beam \
 一个用于"序列→序列"关系合成的最小完整系统（MVP），聚焦 **N≤20** 的短前缀任务，内置：
 
 * 专用 **DSL**（覆盖 `scale/offset/diff/scan/zip/conv/poly/binom/ibinom/euler` 等常见关系）
-* **INSERT1 / INSERT2** 原语（仅在第 1 / 第 2 位插入常数；长度不变）——面向 Moonshine 例子
+* **INSERT1 / INSERT2** 原语（仅在第 1 / 第 2 位插入常数；长度不变）——面向 Moonshine 例子。**注意：** 新版实现不再接受常数参数，而是直接从目标数列 B 中读取对应位置的值。
 * **程序必须包含 A**：强制要求 B 必须从 A 变换而来，不允许纯原语组合
 * **Moonshine 宽检验**（前 `k` 项严格匹配，尾部对数相对误差放宽，阈值随索引线性增长）
 * **EGD**（执行引导束搜）：语法约束 + 宽松/严格双执行器前缀剪枝 + "最小误差兜底"
-* **模板 + 求参** 快速通道：`SCAN_ADD A`、`INSERT1 B[1] (SCAN_ADD A)`、`INSERT2 B[2] (SCAN_ADD A)`
+* **模板 + 求参** 快速通道：`SCAN_ADD A`、`INSERT1 (SCAN_ADD A)`、`INSERT2 (SCAN_ADD A)`
 * 训练：**交叉熵主损失** + **小权重执行宽损失**（对 moonshine-like 合成样本）
 * 运行时间统计：成功时输出 `beam / check / total` 秒数；模板命中可选打印 `tpl`
 
@@ -150,24 +150,22 @@ python main.py beam \
 
 ## 训练
 
-交叉熵（CE）主损失 + moonshine 宽损失（权重默认 0.1，仅对 moonshine-like 合成样本启用）：
+当前版本训练仅使用交叉熵（CE）主损失（不含执行宽损失）：
 
 ```bash
 python train_torch.py \
   --out ckpt.pt \
-  --steps 20000 --bs 128 --m 200000 \
-  --moonshine_prob 0.1 --lambda_exec 0.1 --amp
+  --steps 20000 --bs 128 --amp
 ```
 
 可调建议：
 
-* 更快贴近 moonshine：`--moonshine_prob 0.3`
+* 更快贴近 moonshine：可在数据合成阶段提高 moonshine-like 样本占比
 * 更强训练：`--steps 100000`
 
 训练日志中：
 
-* `loss` 为总损失，`ce` 为交叉熵；困惑度约为 `exp(ce)`。
-* 可选打印 `exec`（moonshine 宽损失）。
+* `loss` 为总损失（交叉熵）；困惑度约为 `exp(loss)`。
 
 ---
 
@@ -190,10 +188,10 @@ python train_torch.py \
 `SHIFT k`, `REIDX k b`, `SUBSAMPLE k`, `REPEAT k`, `DROP k`, `DROP_AT_2`
 
 **插项/删除原语**
-`INSERT1 c`、`INSERT2 c`：仅在第 1/2 位插入常数 `c`，其他右移并丢弃末项，**长度不变**。
+`INSERT1`、`INSERT2`：仅在第 1/2 位插入目标数列 B 对应位置的值，其他右移并丢弃末项，**长度不变**。
 `DROP_AT_2`：删除第 2 个元素，其他元素前移，**长度减 1**。
 
-> 用于 Moonshine 例子：`INSERT1 744 SCAN_ADD A`。
+> 用于 Moonshine 例子：`INSERT1 SCAN_ADD A`。
 
 ---
 
@@ -234,8 +232,8 @@ python train_torch.py \
 在 `--moonshine` 下先试：
 
 1. `SCAN_ADD A`
-2. `INSERT1 B[1] (SCAN_ADD A)`
-3. `INSERT2 B[2] (SCAN_ADD A)`
+2. `INSERT1 (SCAN_ADD A)`
+3. `INSERT2 (SCAN_ADD A)`
 
 命中则直接返回（可选打印 `tpl` 时间）；未命中则进入束搜。
 

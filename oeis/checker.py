@@ -30,7 +30,7 @@ def check_program_on_pair(tokens: List[str], A_full: List[int], B_full: List[int
         return CheckReport(False, False, False, "program_must_contain_A", tokens, 0, 0, None)
     # Stage A
     A_vis = A_full[:n_in]; B_vis = B_full[:n_in]
-    rA = inter_loose.execute(P, A_vis)
+    rA = inter_loose.execute(P, A_vis, B_vis)
     if (not rA.ok) or (rA.seq is None) or (len(rA.seq) < n_in):
         return CheckReport(False, False, False, f"stageA_exec_fail:{rA.reason}", tokens, rA.used_cost, rA.budget_total, None)
     for i,(x,y) in enumerate(zip(rA.seq[:n_in], B_vis)):
@@ -38,7 +38,7 @@ def check_program_on_pair(tokens: List[str], A_full: List[int], B_full: List[int
             return CheckReport(False, False, False, f"stageA_mismatch@{i}:{x}!={y}", tokens, rA.used_cost, rA.budget_total, i)
     # Stage B
     N2 = n_in + n_chk
-    rB = inter_strict.execute(P, A_full[:N2])
+    rB = inter_strict.execute(P, A_full[:N2], B_full[:N2])
     if (not rB.ok) or (rB.seq is None) or (len(rB.seq) < N2):
         return CheckReport(False, True, False, f"stageB_exec_fail:{rB.reason}", tokens, rB.used_cost, rB.budget_total, None)
     for i,(x,y) in enumerate(zip(rB.seq[:N2], B_full[:N2])):
@@ -59,7 +59,7 @@ def check_program_moonshine(tokens: List[str], A_full: List[int], B_full: List[i
     if not P.contains_A():
         return CheckReport(False, False, False, "program_must_contain_A", tokens, 0, 0, None)
     inter = Interpreter(ExecConfig(strict=True, t0=10, t_step=3))
-    r = inter.execute(P, A_full[:N2])
+    r = inter.execute(P, A_full[:N2], B_full[:N2])
     if (not r.ok) or (r.seq is None) or (len(r.seq) < N2):
         return CheckReport(False, False, False, f"exec_fail:{r.reason}", tokens, r.used_cost, r.budget_total, None)
     Bh = r.seq[:N2]; Bt = B_full[:N2]

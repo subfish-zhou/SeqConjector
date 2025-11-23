@@ -75,7 +75,7 @@ class ProgramGenerator:
         self.unary_arith = ["SCALE", "OFFSET", "MAP_ABS", "MAP_SGN", "MAP_MOD", "MAP_DIV", "MAP_SQRT"]
         self.unary_scan = ["SCAN_ADD", "SCAN_MUL", "DIFF_FWD", "DIFF_BACK"]
         self.unary_trans = ["CONV_FWD", "CONV_BACK", "POLY"]  # Removed BINOM, IBINOM, EULER (too slow)
-        self.unary_idx = ["SHIFT", "REIDX", "SUBSAMPLE", "REPEAT", "DROP", "DROP_AT_2", "INSERT1", "INSERT2"]
+        self.unary_idx = ["SHIFT", "REIDX", "SUBSAMPLE", "REPEAT", "DROP", "DROP_AT_2"]
         # Removed all number theory functions (MAP_TAU, MAP_SIGMA, etc.) - too slow on large integers
         self.unary_pred = ["PRED_POS", "PRED_NEG", "PRED_IS_EVEN_N", "PRED_EQ_CONST", "PRED_GT_CONST", "PRED_LT_CONST", "PRED_NOT"]
         
@@ -89,18 +89,36 @@ class ProgramGenerator:
 
     def _random_args(self, op):
         # Helper to generate arguments for ops that require them
-        if op in ["SCALE", "OFFSET"]: return [random.choice([-2,-1,2,3,4,5,10])]
-        if op in ["MAP_MOD", "MAP_DIV"]: return [random.choice([2,3,4,5,10])]
-        if op in ["DIFF_FWD", "DIFF_BACK", "CONV_FWD", "CONV_BACK"]: return [random.choice([1,1,1,2,3])]
-        if op == "SHIFT": return [random.randint(1, 4)]
-        if op == "SUBSAMPLE": return [random.randint(2, 4)]
-        if op == "REPEAT": return [random.randint(2, 3)]
-        if op == "DROP": return [random.randint(1, 5)]
-        if op == "INSERT1" or op == "INSERT2": return [random.randint(-5, 5)]
+        # Use full range [-16, 16] for all constant arguments as requested
+        full_range = list(range(-16, 17))
+        
+        if op in ["SCALE", "OFFSET"]: return [random.choice(full_range)]
+        if op in ["MAP_MOD", "MAP_DIV"]: 
+            # Avoid 0 and 1 for mod/div to be interesting, but keep range wide
+            choices = [x for x in full_range if abs(x) >= 2]
+            if not choices: choices = [2]
+            return [random.choice(choices)]
+        if op in ["DIFF_FWD", "DIFF_BACK", "CONV_FWD", "CONV_BACK"]: 
+            # Positive only for these usually
+            choices = [x for x in full_range if x > 0]
+            if not choices: choices = [1]
+            return [random.choice(choices)]
+        if op == "SHIFT": 
+            choices = [x for x in full_range if x > 0]
+            return [random.choice(choices) if choices else 1]
+        if op == "SUBSAMPLE": 
+            choices = [x for x in full_range if x >= 2]
+            return [random.choice(choices) if choices else 2]
+        if op == "REPEAT": 
+            choices = [x for x in full_range if x >= 2]
+            return [random.choice(choices) if choices else 2]
+        if op == "DROP": 
+            choices = [x for x in full_range if x > 0]
+            return [random.choice(choices) if choices else 1]
         if op == "REIDX": return [random.choice([2,3]), random.choice([0,1])] # k, b
         if op == "POLY":
-            return [random.randint(-2,2) for _ in range(3)] # a,b,c
-        if "CONST" in op: return [random.randint(0, 5)]
+            return [random.choice(full_range) for _ in range(3)] # a,b,c
+        if "CONST" in op: return [random.choice(full_range)]
         return []
 
     def generate(self, max_depth=3, max_len=8):
@@ -163,7 +181,7 @@ class ProgramGenerator:
 # ==========================================
 # 3. Parallel Worker
 # ==========================================
-def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficulty, queue):
+def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficulty, real_ratio, queue):
     try:
         # Re-init random seed for this process
         random.seed(seed + job_id * 9999)
@@ -190,7 +208,7 @@ def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficu
                 attempts += 1
                 
                 # 1. Gen A
-                if random.random() < 0.6:
+                if random.random() < real_ratio:
                     # Extract from real OEIS data (min_len=7, no upper limit)
                     base = pool.get_random(min_len=7)
                     if random.random() < 0.3: 
@@ -241,23 +259,55 @@ def worker_generate(job_id, num_samples, seed, out_file, moonshine_prob, difficu
 
                 B_full = r.seq
                 
-                # 4. Moonshine
+                # 4. Moonshine & INSERT Mutation
+                # With some probability, apply INSERT1 or INSERT2 mutation
+                # This simulates the case where the sequence is "almost" P(A) but with a modified head
                 is_moon = (random.random() < moonshine_prob)
-                if is_moon and len(B_full) >= 12:
-                    s = random.randint(4, 8)
-                    gamma = random.uniform(1e-3, 5e-3)
-                    for t in range(s, len(B_full)):
-                        try:
-                            fac = math.exp(gamma * (t - s))
-                            val = B_full[t] * fac
-                            if abs(val) < 1e18:
-                                B_full[t] = int(round(val))
-                        except: pass
+                
+                # New INSERT logic:
+                # If we decide to apply INSERT mutation, we modify B_full at pos 1 or 2
+                # and wrap the program P with INSERT1 or INSERT2.
+                # We pick a random large constant to simulate "real world" data.
+                
+                toks = P.to_tokens()
+                
+                if is_moon and len(B_full) >= 5:
+                    mutation_type = random.choice(["none", "insert1", "insert2", "noise"])
+                    
+                    if mutation_type == "insert1":
+                        # Modify B[1] to a random large value
+                        # Range can be large as requested
+                        val = random.randint(-10000, 10000)
+                        if random.random() < 0.1: val = random.randint(-1000000, 1000000)
+                        
+                        B_full = list(B_full) # Copy
+                        B_full.insert(1, val)
+                        if len(B_full) > len(A_full): B_full.pop() # Keep length consistent
+                        toks = ["INSERT1"] + toks
+                        
+                    elif mutation_type == "insert2":
+                        val = random.randint(-10000, 10000)
+                        if random.random() < 0.1: val = random.randint(-1000000, 1000000)
+                        
+                        B_full = list(B_full)
+                        B_full.insert(2, val)
+                        if len(B_full) > len(A_full): B_full.pop() # Keep length consistent
+                        toks = ["INSERT2"] + toks
+                        
+                    elif mutation_type == "noise":
+                        # Existing noise logic (exponential drift)
+                        s = random.randint(4, 8)
+                        gamma = random.uniform(1e-3, 5e-3)
+                        for t in range(s, len(B_full)):
+                            try:
+                                fac = math.exp(gamma * (t - s))
+                                val = B_full[t] * fac
+                                if abs(val) < 1e18:
+                                    B_full[t] = int(round(val))
+                            except: pass
                 
                 # Determine train/validation split using unified rule
                 n_in, n_validate = compute_split(len(A_full))
-                
-                toks = P.to_tokens()
                 
                 # Store minimal info
                 item = {
@@ -294,6 +344,7 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--difficulty", type=float, default=0.5, help="0.0=easy(short), 1.0=hard(mixed)")
     ap.add_argument("--moonshine_prob", type=float, default=0.1)
+    ap.add_argument("--real_ratio", type=float, default=0.6, help="Ratio of real OEIS sequences used as input")
     ap.add_argument("--prefix", default="data", help="Prefix for output filenames")
     ap.add_argument("--seed", type=int, default=0, help="Random seed base")
     args = ap.parse_args()
@@ -310,10 +361,10 @@ def main():
     pool_args = []
     for i in range(args.workers):
         out_file = os.path.join(args.out_dir, f"{args.prefix}_part_{i:03d}.jsonl")
-        pool_args.append((i, samples_per_worker, args.seed, out_file, args.moonshine_prob, args.difficulty, queue))
+        pool_args.append((i, samples_per_worker, args.seed, out_file, args.moonshine_prob, args.difficulty, args.real_ratio, queue))
         
     print(f"Generating {args.total_samples} samples with {args.workers} workers...")
-    print(f"Difficulty level: {args.difficulty}")
+    print(f"Difficulty level: {args.difficulty}, Real Ratio: {args.real_ratio}")
     
     t0 = time.time()
     

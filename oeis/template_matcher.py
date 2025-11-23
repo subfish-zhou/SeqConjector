@@ -197,24 +197,12 @@ def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[T
     # 8. Moonshine-specific templates (50-55)
     # These use actual B values for INSERT constants
     if len(B) >= 2:
-        c1 = B[1]
-        if abs(c1) < 1e15:  # Reasonable range (avoid overflow in string conversion)
-            try:
-                c1_str = str(int(c1))
-                templates.append((52, ["INSERT1", c1_str, "SCAN_ADD", "A"], 
-                                f"Moonshine INSERT1 (B[1]={int(c1)})"))
-            except:
-                pass
+        templates.append((52, ["INSERT1", "SCAN_ADD", "A"], 
+                        f"Moonshine INSERT1 (B[1])"))
     
     if len(B) >= 3:
-        c2 = B[2]
-        if abs(c2) < 1e15:
-            try:
-                c2_str = str(int(c2))
-                templates.append((51, ["INSERT2", c2_str, "SCAN_ADD", "A"], 
-                                f"Moonshine INSERT2 (B[2]={int(c2)})"))
-            except:
-                pass
+        templates.append((51, ["INSERT2", "SCAN_ADD", "A"], 
+                        f"Moonshine INSERT2 (B[2])"))
     
     # Always include basic moonshine template as last resort
     templates.append((50, ["SCAN_ADD", "A"], "Moonshine baseline"))
