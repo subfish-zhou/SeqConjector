@@ -74,18 +74,18 @@ class ProgramGenerator:
         # 1-arity (Unary)
         self.unary_arith = ["SCALE", "OFFSET", "MAP_ABS", "MAP_SGN", "MAP_MOD", "MAP_DIV", "MAP_SQRT"]
         self.unary_scan = ["SCAN_ADD", "SCAN_MUL", "DIFF_FWD", "DIFF_BACK"]
-        self.unary_trans = ["CONV_FWD", "CONV_BACK", "POLY"]  # Removed BINOM, IBINOM, EULER (too slow)
-        self.unary_idx = ["SHIFT", "REIDX", "SUBSAMPLE", "REPEAT", "DROP", "DROP_AT_2"]
+        self.unary_trans = ["CONV_FWD", "CONV_BACK"]  # Removed BINOM, IBINOM, EULER (too slow), POLY (template only)
+        self.unary_idx = ["REIDX_EVEN", "REIDX_ODD", "DROP1", "DROP2"]
         # Removed all number theory functions (MAP_TAU, MAP_SIGMA, etc.) - too slow on large integers
-        self.unary_pred = ["PRED_POS", "PRED_NEG", "PRED_IS_EVEN_N", "PRED_EQ_CONST", "PRED_GT_CONST", "PRED_LT_CONST", "PRED_NOT"]
+        self.unary_pred = ["PRED_POS", "PRED_NEG", "PRED_IS_EVEN_N"]
         
         self.unary_ops = self.unary_arith + self.unary_scan + self.unary_trans + self.unary_idx + self.unary_pred
 
         # 2-arity (Binary)
-        self.binary_ops = ["SEQ_ADD", "SEQ_SUB", "SEQ_MUL", "SEQ_DIV", "PRED_AND", "PRED_OR"]
+        self.binary_ops = ["SEQ_ADD", "SEQ_SUB", "SEQ_MUL", "SEQ_DIV"]
         
         # 3-arity (Ternary)
-        self.ternary_ops = ["COND"]
+        self.ternary_ops = []
 
     def _random_args(self, op):
         # Helper to generate arguments for ops that require them
@@ -103,22 +103,7 @@ class ProgramGenerator:
             choices = [x for x in full_range if x > 0]
             if not choices: choices = [1]
             return [random.choice(choices)]
-        if op == "SHIFT": 
-            choices = [x for x in full_range if x > 0]
-            return [random.choice(choices) if choices else 1]
-        if op == "SUBSAMPLE": 
-            choices = [x for x in full_range if x >= 2]
-            return [random.choice(choices) if choices else 2]
-        if op == "REPEAT": 
-            choices = [x for x in full_range if x >= 2]
-            return [random.choice(choices) if choices else 2]
-        if op == "DROP": 
-            choices = [x for x in full_range if x > 0]
-            return [random.choice(choices) if choices else 1]
-        if op == "REIDX": return [random.choice([2,3]), random.choice([0,1])] # k, b
-        if op == "POLY":
-            return [random.choice(full_range) for _ in range(3)] # a,b,c
-        if "CONST" in op: return [random.choice(full_range)]
+        # SUBSAMPLE, REPEAT, POLY removed (used only in preprocessing/templates)
         return []
 
     def generate(self, max_depth=3, max_len=8):

@@ -9,9 +9,33 @@ echo "=========================================="
 echo "Detecting system resources..."
 echo "=========================================="
 
-# Detect CPU cores
+# Detect CPU cores - try multiple methods
 CPU_CORES=$(nproc 2>/dev/null || echo "4")
-echo "CPU cores: $CPU_CORES"
+echo "CPU cores (nproc): $CPU_CORES"
+
+# Try to get more detailed CPU info
+if [ -f /proc/cpuinfo ]; then
+    # Count actual processor entries
+    PHYSICAL_CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo "$CPU_CORES")
+    echo "Physical cores (from /proc/cpuinfo): $PHYSICAL_CORES"
+    
+    # Use the larger value (more accurate)
+    if [ $PHYSICAL_CORES -gt $CPU_CORES ]; then
+        CPU_CORES=$PHYSICAL_CORES
+        echo "Using physical core count: $CPU_CORES"
+    fi
+fi
+
+# Alternative: use lscpu if available
+if command -v lscpu &> /dev/null; then
+    LSCPU_CORES=$(lscpu -p | grep -v '^#' | wc -l 2>/dev/null || echo "0")
+    if [ $LSCPU_CORES -gt $CPU_CORES ]; then
+        CPU_CORES=$LSCPU_CORES
+        echo "Using lscpu count: $CPU_CORES"
+    fi
+fi
+
+echo "Final CPU cores detected: $CPU_CORES"
 
 # Detect available memory (in MB)
 TOTAL_MEM=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')
@@ -28,18 +52,28 @@ AVAILABLE_MEM=$((TOTAL_MEM * 80 / 100))
 MAX_WORKERS_BY_MEM=$((AVAILABLE_MEM / WORKER_MEM))
 MAX_WORKERS_BY_CPU=$CPU_CORES
 
+# Oversubscribe CPU conservatively based on local testing
+# Tests show 1x is fastest, 2x+ causes slowdown due to context switching
+# But server might have different I/O characteristics
+WORKERS_WITH_OVERSUBSCRIBE=$((MAX_WORKERS_BY_CPU * 120 / 100))  # 1.2x conservative
+
 # Take the minimum to avoid over-subscription
-if [ $MAX_WORKERS_BY_MEM -lt $MAX_WORKERS_BY_CPU ]; then
+if [ $MAX_WORKERS_BY_MEM -lt $WORKERS_WITH_OVERSUBSCRIBE ]; then
     AUTO_WORKERS=$MAX_WORKERS_BY_MEM
     LIMIT_REASON="memory"
 else
-    AUTO_WORKERS=$MAX_WORKERS_BY_CPU
-    LIMIT_REASON="CPU cores"
+    AUTO_WORKERS=$WORKERS_WITH_OVERSUBSCRIBE
+    LIMIT_REASON="CPU cores (1.2x oversubscribed)"
 fi
 
-# Ensure at least 1 worker, cap at 128
+# Cap at 512 for ProcessPoolExecutor stability
+if [ $AUTO_WORKERS -gt 512 ]; then
+    AUTO_WORKERS=512
+    LIMIT_REASON="maximum pool size (512)"
+fi
+
+# Ensure at least 1 worker
 AUTO_WORKERS=$((AUTO_WORKERS < 1 ? 1 : AUTO_WORKERS))
-AUTO_WORKERS=$((AUTO_WORKERS > 128 ? 128 : AUTO_WORKERS))
 
 echo "Available memory for workers: ${AVAILABLE_MEM}MB"
 echo "Max workers by memory: $MAX_WORKERS_BY_MEM"
@@ -83,7 +117,7 @@ OUTPUT_FILE="$OUTPUT_DIR/${A_NAME}_to_${B_NAME}_${TIMESTAMP}.jsonl"
 STATS_FILE="$OUTPUT_DIR/${A_NAME}_to_${B_NAME}_${TIMESTAMP}_stats.txt"
 
 # Build command
-CMD="python experiment_batch.py"
+CMD="python experiment_batch_optimized.py"
 CMD="$CMD --A-file \"$A_FILE\""
 CMD="$CMD --B-file \"$B_FILE\""
 CMD="$CMD --output \"$OUTPUT_FILE\""

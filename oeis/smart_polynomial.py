@@ -2,10 +2,11 @@
 智能计算多项式关系的系数
 
 对于二次关系 B[i] = a*A[i]² + b*A[i] + c，使用最小二乘法直接求解
+同时支持增长模式检测和指数拟合
 """
 
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Literal
 
 
 def fit_quadratic(A: List[int], B: List[int]) -> Optional[Tuple[float, float, float, float]]:
@@ -314,6 +315,169 @@ def fit_offset_integer(A: List[int], B: List[int],
             return None
         
         return c_int
+    
+    except:
+        return None
+
+
+def detect_growth_pattern(seq: List[int]) -> Literal["constant", "linear", "quadratic", "polynomial", "exponential", "super_exponential", "unknown"]:
+    """
+    检测序列的增长模式
+    
+    Args:
+        seq: 输入序列
+        
+    Returns:
+        增长模式类型
+    """
+    if len(seq) < 4:
+        return "unknown"
+    
+    # 转换为numpy数组
+    arr = np.array(seq, dtype=float)
+    
+    # 检查是否为常数
+    if np.std(arr) < 1e-6:
+        return "constant"
+    
+    # 计算连续差分
+    diff1 = np.diff(arr)
+    diff2 = np.diff(diff1)
+    diff3 = np.diff(diff2)
+    
+    # 计算连续比值
+    ratios = []
+    for i in range(1, len(arr)):
+        if abs(arr[i-1]) > 1e-6:
+            ratios.append(arr[i] / arr[i-1])
+    
+    # 一阶差分接近常数 -> 线性
+    if len(diff1) >= 2 and np.std(diff1) < 0.5 * np.abs(np.mean(diff1)) + 1e-6:
+        return "linear"
+    
+    # 二阶差分接近常数 -> 二次
+    if len(diff2) >= 2 and np.std(diff2) < 0.5 * np.abs(np.mean(diff2)) + 1e-6:
+        return "quadratic"
+    
+    # 三阶差分接近常数 -> 三次多项式
+    if len(diff3) >= 2 and np.std(diff3) < 0.5 * np.abs(np.mean(diff3)) + 1e-6:
+        return "polynomial"
+    
+    # 连续比值接近常数 -> 指数
+    if len(ratios) >= 3:
+        ratio_mean = np.mean(ratios)
+        ratio_std = np.std(ratios)
+        if ratio_std < 0.1 * abs(ratio_mean) and abs(ratio_mean) > 1.1:
+            return "exponential"
+    
+    # 连续比值的比值递增 -> 超指数
+    if len(ratios) >= 4:
+        ratio_ratios = []
+        for i in range(1, len(ratios)):
+            if abs(ratios[i-1]) > 1e-6:
+                ratio_ratios.append(ratios[i] / ratios[i-1])
+        if len(ratio_ratios) >= 2:
+            if np.mean(ratio_ratios) > 1.2 and np.std(ratio_ratios) < 0.3:
+                return "super_exponential"
+    
+    # 其他多项式情况
+    if len(diff3) >= 2 and np.std(diff3) < 2.0 * np.abs(np.mean(diff3)):
+        return "polynomial"
+    
+    return "unknown"
+
+
+def fit_exponential_integer(seq: List[int], 
+                            r2_threshold: float = 0.95,
+                            max_base: int = 100) -> Optional[Tuple[int, int]]:
+    """
+    拟合指数关系: seq[i] = a * b^i
+    
+    策略：
+    1. 对数变换: log(seq[i]) = log(a) + i*log(b)
+    2. 线性拟合得到 log(a) 和 log(b)
+    3. 反变换得到 a 和 b
+    4. 验证是否为整数底数
+    
+    Args:
+        seq: 输入序列
+        r2_threshold: R²阈值
+        max_base: 底数的最大值
+        
+    Returns:
+        (a, base) 如果是整数指数关系，否则 None
+    """
+    if len(seq) < 3:
+        return None
+    
+    # 移除非正数（不能取对数）
+    valid_indices = [i for i, x in enumerate(seq) if x > 0]
+    if len(valid_indices) < 3:
+        return None
+    
+    try:
+        indices = np.array(valid_indices, dtype=float)
+        values = np.array([seq[i] for i in valid_indices], dtype=float)
+        log_values = np.log(values)
+        
+        # 线性拟合: log(y) = log(a) + i*log(b)
+        X = np.column_stack([np.ones_like(indices), indices])
+        coeffs, residuals, rank, s = np.linalg.lstsq(X, log_values, rcond=None)
+        log_a, log_b = coeffs
+        
+        # 计算 R²
+        log_pred = log_a + log_b * indices
+        ss_res = np.sum((log_values - log_pred)**2)
+        ss_tot = np.sum((log_values - np.mean(log_values))**2)
+        
+        if ss_tot < 1e-10:
+            r_squared = 1.0 if ss_res < 1e-10 else 0.0
+        else:
+            r_squared = 1.0 - (ss_res / ss_tot)
+        
+        # R²太低
+        if r_squared < r2_threshold:
+            return None
+        
+        # 反变换
+        a_float = np.exp(log_a)
+        b_float = np.exp(log_b)
+        
+        # 尝试整数底数
+        b_int = int(round(b_float))
+        
+        # 检查底数是否合理
+        if b_int < 2 or b_int > max_base:
+            return None
+        
+        # 检查是否接近整数底数
+        if abs(b_float - b_int) > 0.1:
+            return None
+        
+        # 尝试不同的 a 值（可能是整数或简单分数）
+        # 先尝试 a=1
+        pred_1 = np.array([b_int ** i for i in valid_indices], dtype=np.int64)
+        error_1 = np.max(np.abs(values - pred_1))
+        
+        if error_1 == 0:
+            return (1, b_int)
+        
+        # 尝试从第一个值推导 a
+        if valid_indices[0] == 0:
+            a_candidate = int(round(values[0]))
+        else:
+            a_candidate = int(round(values[0] / (b_int ** valid_indices[0])))
+        
+        if a_candidate <= 0 or a_candidate > 10000:
+            return None
+        
+        pred_a = np.array([a_candidate * (b_int ** i) for i in valid_indices], dtype=np.int64)
+        error_a = np.max(np.abs(values - pred_a))
+        
+        if error_a == 0:
+            return (a_candidate, b_int)
+        
+        return None
     
     except:
         return None

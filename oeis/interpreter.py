@@ -42,18 +42,11 @@ class Interpreter:
             "SCAN_ADD": self._op_SCAN_ADD, "SCAN_MUL": self._op_SCAN_MUL,
             "DIFF_FWD": self._op_DIFF_FWD, "DIFF_BACK": self._op_DIFF_BACK,
             "CONV_FWD": self._op_CONV_FWD, "CONV_BACK": self._op_CONV_BACK,
-            "POLY": self._op_POLY,
-            "SHIFT": self._op_SHIFT, "REIDX": self._op_REIDX,
-            "SUBSAMPLE": self._op_SUBSAMPLE, "REPEAT": self._op_REPEAT,
-            "DROP": self._op_DROP, "DROP_AT_2": self._op_DROP_AT_2,
+            "REIDX_EVEN": self._op_REIDX_EVEN, "REIDX_ODD": self._op_REIDX_ODD,
+            "DROP1": self._op_DROP1, "DROP2": self._op_DROP2,
             "INSERT1": self._op_INSERT1, "INSERT2": self._op_INSERT2,
             "PRED_POS": self._op_PRED_POS, "PRED_NEG": self._op_PRED_NEG,
-            "PRED_IS_EVEN_N": self._op_PRED_IS_EVEN_N,
-            "PRED_EQ_CONST": self._op_PRED_EQ_CONST,
-            "PRED_GT_CONST": self._op_PRED_GT_CONST, "PRED_LT_CONST": self._op_PRED_LT_CONST,
-            "PRED_NOT": self._op_PRED_NOT,
-            "PRED_AND": self._op_PRED_AND, "PRED_OR": self._op_PRED_OR,
-            "COND": self._op_COND
+            "PRED_IS_EVEN_N": self._op_PRED_IS_EVEN_N
         }
 
     def execute(self, program: Program, A: List[int], B: Optional[List[int]] = None) -> ExecResult:
@@ -190,54 +183,35 @@ class Interpreter:
             budget.add_for(i); budget.charge(1); Res[i]=X[i]+X[i-k]
         return Res
 
-    def _op_POLY(self, node, A, budget, B):
-        X=self._get_X(node, A, budget, B); a,b,c = node.args
-        return [budget.add_for(i) or (budget.charge(3) or 0, a*X[i]*X[i] + b*X[i] + c)[1] for i in range(len(X))]
-
-    def _op_SHIFT(self, node, A, budget, B):
-        X=self._get_X(node, A, budget, B); k=node.args[0]
-        N=len(X); Res=[0]*N
-        for i in range(N):
-            budget.add_for(i); budget.charge(1)
-            idx = i-k
-            if idx < 0 or idx >= N: Res[i]=0
-            else: Res[i]=X[idx]
-        return Res
-
-    def _op_REIDX(self, node, A, budget, B):
-        X=self._get_X(node, A, budget, B); k,b = node.args; N=len(X)
-        if k<0: raise RuntimeError("reidx_negative_k")
+    def _op_REIDX_EVEN(self, node, A, budget, B):
+        """从第一项开始跳一个选一个 (索引 0,2,4,6...)"""
+        X=self._get_X(node, A, budget, B); N=len(X)
         if N==0: return []
-        Res=[0]*N
-        for i in range(N):
-            budget.add_for(i); budget.charge(1)
-            idx = k*i+b
-            if idx < 0 or idx >= N: Res[i]=0
-            else: Res[i]=X[idx]
-        return Res
-
-    def _op_SUBSAMPLE(self, node, A, budget, B):
-        X=self._get_X(node, A, budget, B); k=node.args[0]
-        if k<=0: raise RuntimeError("subsample_nonpositive_k")
-        return [budget.add_for(i) or (budget.charge(3) or 0, X[i*k])[1] for i in range(len(X)//k)]
-
-    def _op_REPEAT(self, node, A, budget, B):
-        X=self._get_X(node, A, budget, B); k=node.args[0]
-        if k<=0: raise RuntimeError("repeat_nonpositive_k")
         Res=[]
-        for i in range(len(X)*k):
-            budget.add_for(i); budget.charge(3); Res.append(X[i//k])
+        for i in range(0, N, 2):
+            budget.add_for(len(Res)); budget.charge(1)
+            Res.append(X[i])
         return Res
 
-    def _op_DROP(self, node, A, budget, B):
-        X=self._get_X(node, A, budget, B); k=node.args[0]
-        if len(X)<=k: return []
+    def _op_REIDX_ODD(self, node, A, budget, B):
+        """从第二项开始跳一个选一个 (索引 1,3,5,7...)"""
+        X=self._get_X(node, A, budget, B); N=len(X)
+        if N==0: return []
         Res=[]
-        for i in range(len(X)-k):
-            budget.add_for(i); budget.charge(1); Res.append(X[i+k])
+        for i in range(1, N, 2):
+            budget.add_for(len(Res)); budget.charge(1)
+            Res.append(X[i])
         return Res
 
-    def _op_DROP_AT_2(self, node, A, budget, B):
+    def _op_DROP1(self, node, A, budget, B):
+        X=self._get_X(node, A, budget, B)
+        if len(X)<=1: return []
+        Res=[]
+        for i in range(len(X)-1):
+            budget.add_for(i); budget.charge(1); Res.append(X[i+1])
+        return Res
+
+    def _op_DROP2(self, node, A, budget, B):
         X=self._get_X(node, A, budget, B); N=len(X)
         if N<=1: return X
         Res=[]
@@ -287,36 +261,3 @@ class Interpreter:
     def _op_PRED_IS_EVEN_N(self, node, A, budget, B):
         N=len(A)
         return [ (budget.add_for(i) or (budget.charge(1) or 0, 1 if (i%2==0) else 0)[1]) for i in range(N) ]
-
-    def _op_PRED_EQ_CONST(self, node, A, budget, B):
-        X=self._get_X(node, A, budget, B); c=node.args[0]
-        return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]==c else 0)[1] for i in range(len(X))]
-
-    def _op_PRED_GT_CONST(self, node, A, budget, B):
-        X=self._get_X(node, A, budget, B); c=node.args[0]
-        return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]>c else 0)[1] for i in range(len(X))]
-
-    def _op_PRED_LT_CONST(self, node, A, budget, B):
-        X=self._get_X(node, A, budget, B); c=node.args[0]
-        return [budget.add_for(i) or (budget.charge(1) or 0, 1 if X[i]<c else 0)[1] for i in range(len(X))]
-
-    def _op_PRED_NOT(self, node, A, budget, B):
-        X=self._get_X(node, A, budget, B); P=X
-        return [budget.add_for(i) or (budget.charge(1) or 0, 0 if P[i]!=0 else 1)[1] for i in range(len(P))]
-
-    def _op_PRED_AND(self, node, A, budget, B):
-        L=self._eval(node.kids[0], A, budget, B); R=self._eval(node.kids[1], A, budget, B)
-        return [budget.add_for(i) or (budget.charge(1) or 0, 1 if (L[i]!=0 and R[i]!=0) else 0)[1] for i in range(len(L))]
-
-    def _op_PRED_OR(self, node, A, budget, B):
-        L=self._eval(node.kids[0], A, budget, B); R=self._eval(node.kids[1], A, budget, B)
-        return [budget.add_for(i) or (budget.charge(1) or 0, 1 if (L[i]!=0 or R[i]!=0) else 0)[1] for i in range(len(L))]
-
-    def _op_COND(self, node, A, budget, B):
-        P=self._eval(node.kids[0], A, budget, B); T=self._eval(node.kids[1], A, budget, B); E=self._eval(node.kids[2], A, budget, B)
-        N=len(P); 
-        if not (len(T)==N and len(E)==N): raise RuntimeError("cond_len_mismatch")
-        Res=[0]*N
-        for i in range(N):
-            budget.add_for(i); budget.charge(1); Res[i]=T[i] if P[i]!=0 else E[i]
-        return Res

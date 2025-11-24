@@ -266,3 +266,149 @@ def get_git_revision() -> Optional[str]:
         pass
     return None
 
+
+def detect_element_repetition(seq: list, max_repeat: int = 10) -> Optional[int]:
+    """
+    检测序列中每个元素是否重复了k次（REPEAT操作的逆）
+    
+    例如: [1,1,2,2,3,3] 每个元素重复2次
+    
+    Args:
+        seq: 输入序列
+        max_repeat: 最大重复次数
+    
+    Returns:
+        重复次数k（如果存在），否则返回None
+    
+    Examples:
+        >>> detect_element_repetition([1,1,2,2,3,3])
+        2
+        >>> detect_element_repetition([1,1,1,2,2,2,3,3,3])
+        3
+        >>> detect_element_repetition([1,2,3,4,5])
+        None
+    """
+    if len(seq) < 2:
+        return None
+    
+    # 尝试不同的重复次数
+    for k in range(2, min(max_repeat + 1, len(seq) + 1)):
+        if len(seq) % k != 0:
+            continue  # 长度必须是k的倍数
+        
+        # 检查每k个元素是否相同
+        is_element_repeated = True
+        expected_len = len(seq) // k
+        
+        for i in range(expected_len):
+            # 检查第i个"组"的k个元素是否都相同
+            base_val = seq[i * k]
+            for j in range(1, k):
+                if i * k + j >= len(seq) or seq[i * k + j] != base_val:
+                    is_element_repeated = False
+                    break
+            if not is_element_repeated:
+                break
+        
+        if is_element_repeated:
+            return k
+    
+    return None
+
+
+def subsample_repeated_sequence(seq: list, repeat_factor: int) -> list:
+    """
+    从元素重复序列中提取原始序列（SUBSAMPLE操作）
+    
+    Args:
+        seq: 输入序列（每个元素重复了repeat_factor次）
+        repeat_factor: 重复次数
+    
+    Returns:
+        简化后的序列（每repeat_factor个取一个）
+    
+    Examples:
+        >>> subsample_repeated_sequence([1,1,2,2,3,3], 2)
+        [1, 2, 3]
+        >>> subsample_repeated_sequence([1,1,1,2,2,2], 3)
+        [1, 2]
+    """
+    return [seq[i * repeat_factor] for i in range(len(seq) // repeat_factor)]
+
+
+def preprocess_sequences(A: list, B: list, max_repeat: int = 10) -> tuple:
+    """
+    预处理序列：检测并简化元素重复模式
+    
+    如果 A 或 B 的每个元素都重复了k次（REPEAT操作的结果），则使用SUBSAMPLE简化
+    
+    Args:
+        A: 输入序列
+        B: 输出序列
+        max_repeat: 最大重复次数
+    
+    Returns:
+        (processed_A, processed_B, was_simplified: bool)
+    
+    Examples:
+        >>> preprocess_sequences([1,1,2,2,3,3], [2,2,4,4,6,6])
+        ([1, 2, 3], [2, 4, 6], True)
+        >>> preprocess_sequences([1,2,3,4], [2,4,6,8])
+        ([1, 2, 3, 4], [2, 4, 6, 8], False)
+    """
+    # 检测 A 的元素重复次数
+    repeat_A = detect_element_repetition(A, max_repeat)
+    
+    # 检测 B 的元素重复次数
+    repeat_B = detect_element_repetition(B, max_repeat)
+    
+    # 如果两者都有元素重复且重复次数相同，则简化
+    if repeat_A is not None and repeat_B is not None and repeat_A == repeat_B:
+        A_simplified = subsample_repeated_sequence(A, repeat_A)
+        B_simplified = subsample_repeated_sequence(B, repeat_B)
+        return A_simplified, B_simplified, True
+    
+    # 如果只有 A 有元素重复，检查 B 是否也符合该重复次数
+    if repeat_A is not None:
+        # 验证 B 是否也按相同次数重复
+        if len(B) % repeat_A == 0:
+            expected_len = len(B) // repeat_A
+            is_B_repeated = True
+            
+            for i in range(expected_len):
+                base_val = B[i * repeat_A]
+                for j in range(1, repeat_A):
+                    if i * repeat_A + j >= len(B) or B[i * repeat_A + j] != base_val:
+                        is_B_repeated = False
+                        break
+                if not is_B_repeated:
+                    break
+            
+            if is_B_repeated:
+                A_simplified = subsample_repeated_sequence(A, repeat_A)
+                B_simplified = subsample_repeated_sequence(B, repeat_A)
+                return A_simplified, B_simplified, True
+    
+    # 如果只有 B 有元素重复，检查 A 是否也符合该重复次数
+    if repeat_B is not None:
+        # 验证 A 是否也按相同次数重复
+        if len(A) % repeat_B == 0:
+            expected_len = len(A) // repeat_B
+            is_A_repeated = True
+            
+            for i in range(expected_len):
+                base_val = A[i * repeat_B]
+                for j in range(1, repeat_B):
+                    if i * repeat_B + j >= len(A) or A[i * repeat_B + j] != base_val:
+                        is_A_repeated = False
+                        break
+                if not is_A_repeated:
+                    break
+            
+            if is_A_repeated:
+                A_simplified = subsample_repeated_sequence(A, repeat_B)
+                B_simplified = subsample_repeated_sequence(B, repeat_B)
+                return A_simplified, B_simplified, True
+    
+    # 没有元素重复或无法简化
+    return A, B, False

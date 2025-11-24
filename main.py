@@ -90,9 +90,21 @@ def cmd_eval(args):
     A = json.load(open(args.A)); B = json.load(open(args.B))
     toks = args.program.strip().split()
     
+    # Preprocess: detect and simplify repeated sequences (consistent with cmd_beam)
+    from oeis.utils import preprocess_sequences
+    A, B, was_simplified = preprocess_sequences(A, B, max_repeat=10)
+    if was_simplified:
+        logger.info(f"Sequences simplified: A={len(A)} terms, B={len(B)} terms")
+    
+    # Check length after simplification
+    min_len = min(len(A), len(B))
+    if min_len <= 5:
+        logger.warning(f"Sequence too short: min_len={min_len} <= 5")
+        print(f"[SKIP] Sequences too short (min_len={min_len} <= 5)")
+        return
+    
     # Auto-compute split if not provided
     if args.n_in is None or args.n_chk is None:
-        min_len = min(len(A), len(B))
         n_in, n_chk = compute_split(min_len)
         if args.n_in is None: args.n_in = n_in
         if args.n_chk is None: args.n_chk = n_chk
@@ -111,17 +123,30 @@ def cmd_eval(args):
 def cmd_beam(args):
     A = json.load(open(args.A)); B = json.load(open(args.B))
     
-    # Auto-compute split if not provided
+    # Step 1: Preprocess - detect and simplify repeated sequences FIRST
+    from oeis.utils import preprocess_sequences
+    A, B, was_simplified = preprocess_sequences(A, B, max_repeat=10)
+    if was_simplified:
+        logger.info(f"Sequences simplified: A={len(A)} terms, B={len(B)} terms (removed repetition)")
+        print(f"[INFO] Sequences simplified by removing repetition pattern")
+    
+    # Step 2: Check length AFTER simplification (prune if too short)
+    min_len = min(len(A), len(B))
+    if min_len <= 5:
+        logger.warning(f"Sequence too short after preprocessing: min_len={min_len} <= 5, skipping")
+        print(f"[SKIP] Sequences too short (min_len={min_len} <= 5), cannot process")
+        return
+    
+    # Step 3: Auto-compute split if not provided
     if args.n_in is None or args.n_chk is None:
-        min_len = min(len(A), len(B))
         n_in_auto, n_chk_auto = compute_split(min_len)
         if args.n_in is None: args.n_in = n_in_auto
         if args.n_chk is None: args.n_chk = n_chk_auto
     
     n_in, n_chk = args.n_in, args.n_chk
-    if n_in + n_chk > min(len(A), len(B)):
-        logger.warning(f"n_in+n_chk={n_in+n_chk} exceeds min length {min(len(A),len(B))}, shrinking n_chk")
-        n_chk = max(0, min(len(A), len(B)) - n_in)
+    if n_in + n_chk > min_len:
+        logger.warning(f"n_in+n_chk={n_in+n_chk} exceeds min length {min_len}, shrinking n_chk")
+        n_chk = max(0, min_len - n_in)
 
     # Compute features once (used by template matching)
     A_vis, B_vis = A[:n_in], B[:n_in]

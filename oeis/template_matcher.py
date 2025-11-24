@@ -11,7 +11,9 @@ from oeis.smart_polynomial import (
     fit_quadratic_integer, 
     fit_linear_integer,
     fit_scale_integer,
-    fit_offset_integer
+    fit_offset_integer,
+    detect_growth_pattern,
+    fit_exponential_integer
 )
 
 
@@ -59,19 +61,90 @@ def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[T
     is_piecewise = float(feat[53])
     
     # ============================================================
-    # 0. ULTRA HIGH PRIORITY: Smart polynomial fitting
+    # 0. GROWTH PATTERN DETECTION & ADVANCED TEMPLATES
+    #    检测B序列的增长模式，尝试预处理+POLY或指数拟合
+    # ============================================================
+    
+    growth_pattern = detect_growth_pattern(B)
+    
+    # 尝试对B序列应用不同的预处理，看能否变成多项式或指数关系
+    preprocessing_ops = [
+        ("", []),  # 无预处理
+        ("INSERT1", ["INSERT1"]),
+        ("INSERT2", ["INSERT2"]),
+        ("DROP1", ["DROP1"]),
+        ("DROP2", ["DROP2"]),
+        ("REIDX_EVEN", ["REIDX_EVEN"]),
+        ("REIDX_ODD", ["REIDX_ODD"]),
+    ]
+    
+    # 如果增长模式是多项式或指数，尝试预处理+拟合
+    if growth_pattern in ["quadratic", "polynomial", "exponential", "super_exponential"]:
+        for preproc_name, preproc_ops in preprocessing_ops:
+            # 应用预处理到A序列
+            try:
+                A_processed = A[:]
+                
+                # 模拟预处理操作
+                from oeis.interpreter import Interpreter, ExecConfig
+                from oeis.program import Node, Program
+                
+                if len(preproc_ops) > 0:
+                    op_name = preproc_ops[0]
+                    node = Node(op_name, args=[], kids=[Node("A", args=[], kids=[])])
+                    prog = Program(node)
+                    
+                    interp = Interpreter(ExecConfig(strict=False))
+                    result = interp.execute(prog, A, B)
+                    
+                    if result.ok and len(result.seq) >= 3:
+                        A_processed = result.seq
+                    else:
+                        continue
+                
+                # 尝试多项式拟合 -> 但不生成POLY模板（已从interpreter删除）
+                if growth_pattern in ["quadratic", "polynomial"]:
+                    # 线性拟合
+                    linear_result = fit_linear_integer(A_processed, B, r2_threshold=0.95, max_coeff=10000)
+                    if linear_result is not None and preproc_ops:
+                        k, c = linear_result
+                        if c == 0:
+                            templates.append((104, 
+                                            ["SCALE", str(k)] + preproc_ops + ["A"], 
+                                            f"Advanced: {preproc_name} then scale {k}"))
+                        elif k == 1:
+                            templates.append((104, 
+                                            ["OFFSET", str(c)] + preproc_ops + ["A"], 
+                                            f"Advanced: {preproc_name} then offset {c:+d}"))
+                        else:
+                            templates.append((103, 
+                                            ["OFFSET", str(c), "SCALE", str(k)] + preproc_ops + ["A"], 
+                                            f"Advanced: {preproc_name} then {k}*x{c:+d}"))
+                
+                # 尝试指数拟合
+                if growth_pattern in ["exponential", "super_exponential"]:
+                    exp_result = fit_exponential_integer(B, r2_threshold=0.90, max_base=100)
+                    if exp_result is not None:
+                        a_exp, base = exp_result
+                        # 指数序列: B[i] = a * base^i
+                        # 这需要特殊处理，因为我们没有直接的EXP原语
+                        # 但我们可以用SCAN_MUL和常数序列来模拟
+                        if preproc_ops and a_exp == 1:
+                            templates.append((106, 
+                                            ["SCALE", str(base)] + preproc_ops + ["A"], 
+                                            f"Exponential: {preproc_name} then base={base}"))
+            
+            except:
+                continue
+    
+    # ============================================================
+    # 1. ULTRA HIGH PRIORITY: Smart polynomial fitting (direct)
     #    直接计算最佳系数，不受±16限制
     # ============================================================
     
-    # 0a. 二次关系: B = a*A² + b*A + c
-    quad_result = fit_quadratic_integer(A, B, r2_threshold=0.90, max_coeff=10000)
-    if quad_result is not None:
-        a, b, c = quad_result
-        templates.append((100, 
-                        ["POLY", str(a), str(b), str(c), "A"], 
-                        f"Smart quad: {a}*x²{b:+d}*x{c:+d}"))
+    # 1a. 二次关系: B = a*A² + b*A + c (POLY已从interpreter删除，不生成此类模板)
     
-    # 0b. 线性关系: B = k*A + c  
+    # 1b. 线性关系: B = k*A + c (direct, no preprocessing)
     linear_result = fit_linear_integer(A, B, r2_threshold=0.95, max_coeff=10000)
     if linear_result is not None:
         k, c = linear_result
@@ -91,7 +164,7 @@ def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[T
                             ["OFFSET", str(c), "SCALE", str(k), "A"], 
                             f"Smart linear: {k}*A{c:+d}"))
     
-    # 0c. 纯缩放: B = k*A
+    # 1c. 纯缩放: B = k*A
     scale_result = fit_scale_integer(A, B, r2_threshold=0.98, max_coeff=10000)
     if scale_result is not None:
         k = scale_result
@@ -99,7 +172,7 @@ def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[T
                         ["SCALE", str(k), "A"], 
                         f"Smart scale: {k}*A"))
     
-    # 0d. 纯偏移: B = A + c
+    # 1d. 纯偏移: B = A + c
     offset_result = fit_offset_integer(A, B, r2_threshold=0.98, max_coeff=10000)
     if offset_result is not None:
         c = offset_result
@@ -108,28 +181,10 @@ def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[T
                         f"Smart offset: A{c:+d}"))
     
     # ============================================================
-    # 1. 常见模式的备用模板（如果智能拟合失败）
+    # 2. 常见模式的备用模板（POLY相关已删除）
     # ============================================================
-    # Direct check: does B look like (A-k)²?
-    if len(A) >= 5 and len(B) >= 5:
-        # Test if B ≈ (A-c)² for c in [-2, -1, 0, 1, 2]
-        for c in [1, 2, 0, -1, -2]:
-            # (x-c)² = x² - 2cx + c²
-            a_coeff = 1
-            b_coeff = -2 * c
-            c_coeff = c * c
-            templates.append((90 - abs(c), 
-                            ["POLY", str(a_coeff), str(b_coeff), str(c_coeff), "A"], 
-                            f"Common: (x{c:+d})²"))
     
-    # Other common polynomials (backup)
-    templates.append((85, ["POLY", "1", "1", "0", "A"], "Common: x²+x"))
-    templates.append((84, ["POLY", "1", "-1", "0", "A"], "Common: x²-x"))
-    templates.append((83, ["POLY", "1", "0", "0", "A"], "Common: x²"))
-    templates.append((82, ["POLY", "1", "0", "1", "A"], "Common: x²+1"))
-    templates.append((81, ["POLY", "1", "0", "-1", "A"], "Common: x²-1"))
-    
-    # 2. Direct boolean matches (priority 70-79)
+    # 3. Direct boolean matches (priority 70-79)
     if is_scan > 0.5:
         templates.append((79, ["SCAN_ADD", "A"], "Cumulative sum (is_scan)"))
     
@@ -139,24 +194,15 @@ def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[T
     if is_scale2 > 0.5:
         templates.append((79, ["SCALE", "2", "A"], "Scale by 2 (is_scale2)"))
     
-    # 2. Power law relationships (80-90)
-    if 1.8 < power_exp < 2.2 and r2_square > 0.90:
-        # Square: B ≈ A²
-        # Try POLY 1 0 0 (a*x² + b*x + c where a=1, b=0, c=0)
-        templates.append((90, ["POLY", "1", "0", "0", "A"], f"Square (power_exp={power_exp:.2f})"))
+    # 4. Power law relationships (80-90) - POLY已删除，跳过多项式模式
     
-    if 2.8 < power_exp < 3.2 and r2_cube > 0.90:
-        # Cubic: B ≈ A³ (no direct primitive, but flag it)
-        # Could try nested SCALE operations or leave for beam search
-        templates.append((85, ["POLY", "1", "0", "0", "A"], f"Cubic hint (power_exp={power_exp:.2f})"))
-    
-    # 3. Simple linear scaling (70-80)
+    # 5. Simple linear scaling (70-80)
     if abs(log_k) > 0.1 and -16 <= k_raw <= 16:
         k_int = int(round(k_raw))
         if abs(k_int - k_raw) < 0.3 and k_int != 0:  # Allow some tolerance
             templates.append((80, ["SCALE", str(k_int), "A"], f"Scale by {k_int} (k_raw={k_raw:.2f})"))
     
-    # 4. Modulo-like pattern (70-75)
+    # 6. Modulo-like pattern (70-75)
     if is_mod_like > 0.5 and is_periodic > 0.5:
         # Infer modulo from period length
         if 2 <= period_length <= 10:
@@ -165,13 +211,13 @@ def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[T
                 templates.append((75, ["MAP_MOD", str(mod_val), "A"], 
                                 f"Modulo {mod_val} (period={period_length:.1f})"))
     
-    # 5. Offset patterns (65-70)
+    # 7. Offset patterns (65-70)
     if abs(c_raw) > 1 and -16 <= c_raw <= 16:
         c_int = int(round(c_raw))
         if abs(c_int - c_raw) < 0.3 and c_int != 0:
             templates.append((70, ["OFFSET", str(c_int), "A"], f"Offset by {c_int} (c_raw={c_raw:.2f})"))
     
-    # 6. Linear combination: k*A + c (60-65)
+    # 8. Linear combination: k*A + c (60-65)
     if (abs(log_k) > 0.1 and abs(c_raw) > 1 and 
         -16 <= k_raw <= 16 and -16 <= c_raw <= 16):
         k_int = int(round(k_raw))
@@ -183,18 +229,9 @@ def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[T
                 ["OFFSET", str(c_int), "SCALE", str(k_int), "A"], 
                 f"Linear: {k_int}*A + {c_int}"))
     
-    # 7. Polynomial (general case, lower priority 55-60)
-    if is_polynomial > 0.5:
-        # Try common polynomial patterns
-        # POLY a b c: a*x² + b*x + c
-        templates.append((60, ["POLY", "1", "2", "1", "A"], "Polynomial: x²+2x+1"))
-        templates.append((58, ["POLY", "1", "1", "0", "A"], "Polynomial: x²+x"))
-        templates.append((56, ["POLY", "1", "0", "1", "A"], "Polynomial: x²+1"))
+    # 9. Polynomial (general case) - POLY已从interpreter删除，不生成模板
     
-    # 7b. Common polynomial shifts (HIGH PRIORITY!)
-    # Removed duplicate - moved to section 0 above
-    
-    # 8. Moonshine-specific templates (50-55)
+    # 10. Moonshine-specific templates (50-55)
     # These use actual B values for INSERT constants
     if len(B) >= 2:
         templates.append((52, ["INSERT1", "SCAN_ADD", "A"], 
@@ -207,13 +244,13 @@ def generate_templates_from_features(A: List[int], B: List[int], feat) -> List[T
     # Always include basic moonshine template as last resort
     templates.append((50, ["SCAN_ADD", "A"], "Moonshine baseline"))
     
-    # 9. Difference-based templates (45-50)
+    # 11. Difference-based templates (45-50)
     if abs(mean_ratio - 1.0) < 0.1:  # Mean is similar
         # Try difference operations with different orders
         templates.append((48, ["DIFF_FWD", "1", "A"], "Difference order 1"))
         templates.append((46, ["DIFF_FWD", "2", "A"], "Difference order 2"))
     
-    # 10. Scan multiply (40-45)
+    # 12. Scan multiply (40-45)
     if abs(power_exp - 1.0) < 0.2 and len(A) >= 3:
         # Check if B might be cumulative product
         templates.append((45, ["SCAN_MUL", "A"], "Cumulative product"))
